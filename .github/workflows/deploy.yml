@@ -1,0 +1,80 @@
+name: Frontend Zero-Downtime Deploy (Build in CI -> Sync Dist)
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: frontend_production_deploy
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build in CI & Deploy Dist
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies in CI Runner
+        run: npm install
+
+      - name: Build Production Dist Bundle with Server Environment
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_ADMIN_EMAIL: ${{ secrets.VITE_ADMIN_EMAIL || 'admin@citywaste.gov' }}
+          VITE_MAP_TILE_URL: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          VITE_MAP_ATTRIBUTION: "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"
+        run: npm run build
+
+      - name: Transfer Pre-built Dist to Lightsail
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ secrets.LIGHTSAIL_USERNAME || 'ubuntu' }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          port: ${{ secrets.LIGHTSAIL_PORT || 22 }}
+          source: "dist/"
+          target: "/home/ubuntu/smartwaste/temp_dist"
+          strip_components: 1
+
+      - name: Atomically Switch Live Symlink on Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ secrets.LIGHTSAIL_USERNAME || 'ubuntu' }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          port: ${{ secrets.LIGHTSAIL_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            APP_DIR="/home/ubuntu/smartwaste"
+            RELEASES_DIR="$APP_DIR/releases"
+            CURRENT_SYMLINK="$APP_DIR/frontend-current"
+            TEMP_DIR="$APP_DIR/temp_dist"
+            TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+            NEW_RELEASE="$RELEASES_DIR/frontend_$TIMESTAMP"
+
+            mkdir -p "$RELEASES_DIR"
+
+            # Move uploaded pre-built dist to release folder
+            mv "$TEMP_DIR" "$NEW_RELEASE"
+
+            # 0ms Atomic Symlink Switch
+            ln -sfn "$NEW_RELEASE" "$CURRENT_SYMLINK"
+
+            # Keep last 5 releases, purge older ones to save disk space
+            cd "$RELEASES_DIR"
+            ls -dt frontend_* | tail -n +6 | xargs -r rm -rf
+
+            echo "✅ [Smart Waste Management] Pre-built dist deployed successfully with Zero Downtime!"
