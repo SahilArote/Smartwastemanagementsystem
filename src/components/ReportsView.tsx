@@ -1,215 +1,302 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
-  PieChart, 
   Download, 
-  Printer, 
-  MapPin, 
-  Truck, 
-  Clock, 
-  TrendingUp,
-  Percent
+  Calendar, 
+  Filter, 
+  CheckCircle2, 
+  TrendingUp, 
+  Compass, 
+  Truck
 } from 'lucide-react';
-import type { CollectionPoint, Route, SystemStats } from '../types';
+import type { Route } from '../types';
+import { exportRoutesToCSV } from '../services/storage';
 
 interface ReportsViewProps {
-  stats: SystemStats;
-  points: CollectionPoint[];
   routes: Route[];
   showToast: (msg: string, type?: 'success' | 'info' | 'error') => void;
 }
 
+const getDefaultStartDate = () => new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+const getDefaultEndDate = () => new Date().toISOString().split('T')[0];
+
 export const ReportsView: React.FC<ReportsViewProps> = ({
-  stats,
-  points,
   routes,
   showToast,
 }) => {
-  // Aggregate waste categories
-  const wasteDistribution: Record<string, number> = {};
-  points.forEach((p) => {
-    wasteDistribution[p.waste_type] = (wasteDistribution[p.waste_type] || 0) + 1;
-  });
+  const [selectedZone, setSelectedZone] = useState('All');
+  const [startDate, setStartDate] = useState<string>(getDefaultStartDate);
+  const [endDate, setEndDate] = useState<string>(getDefaultEndDate);
 
-  // Aggregate area statistics
-  const areaDistribution: Record<string, { total: number; high: number }> = {};
-  points.forEach((p) => {
-    if (!areaDistribution[p.area]) {
-      areaDistribution[p.area] = { total: 0, high: 0 };
-    }
-    areaDistribution[p.area].total++;
-    if (p.priority === 'High') {
-      areaDistribution[p.area].high++;
-    }
-  });
+  // Filter routes by date range and zone
+  const filteredRoutes = useMemo(() => {
+    return routes.filter((r) => {
+      const isDateInRange = r.route_date >= startDate && r.route_date <= endDate;
+      const isZoneMatch = selectedZone === 'All' || r.zone === selectedZone || r.stops.some((s) => s.point_area === selectedZone);
+      return isDateInRange && isZoneMatch;
+    });
+  }, [routes, startDate, endDate, selectedZone]);
 
-  // Export CSV
-  const handleExportCSV = () => {
-    let csv = 'Route Name,Date,Assigned Worker,Total Distance (km),Status,Total Stops,Completed Stops\n';
-    routes.forEach((r) => {
-      const completed = r.stops.filter((s) => s.status === 'Completed').length;
-      csv += `"${r.route_name}","${r.route_date}","${r.assigned_worker_name || 'Unassigned'}",${r.total_distance_km || 0},"${r.status}",${r.stops.length},${completed}\n`;
+  // Aggregate metrics from filtered routes
+  const metrics = useMemo(() => {
+    let totalStops = 0;
+    let completedStops = 0;
+    let totalKm = 0;
+    const workerMap: Record<string, { name: string; routesCount: number; stopsCompleted: number; totalKm: number }> = {};
+    const wasteStreamMap: Record<string, number> = {};
+
+    filteredRoutes.forEach((route) => {
+      totalKm += route.total_distance_km || 0;
+      const wId = route.assigned_worker_id || 'unassigned';
+      const wName = route.assigned_worker_name || 'Unassigned Staff';
+
+      if (!workerMap[wId]) {
+        workerMap[wId] = { name: wName, routesCount: 0, stopsCompleted: 0, totalKm: 0 };
+      }
+      workerMap[wId].routesCount += 1;
+      workerMap[wId].totalKm += route.total_distance_km || 0;
+
+      route.stops.forEach((stop) => {
+        totalStops += 1;
+        if (stop.status === 'Completed') {
+          completedStops += 1;
+          workerMap[wId].stopsCompleted += 1;
+        }
+
+        const wt = stop.waste_type || 'General Waste';
+        wasteStreamMap[wt] = (wasteStreamMap[wt] || 0) + 1;
+      });
     });
 
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `municipal_waste_report_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const completionRate = totalStops > 0 ? Math.round((completedStops / totalStops) * 100) : 0;
+    const workersList = Object.values(workerMap);
 
-    showToast('Operational report exported to CSV', 'success');
+    return {
+      totalRoutesCount: filteredRoutes.length,
+      totalStops,
+      completedStops,
+      completionRate,
+      totalKm: Number(totalKm.toFixed(1)),
+      workersList,
+      wasteStreamMap,
+    };
+  }, [filteredRoutes]);
+
+  const handleExportCSV = () => {
+    if (filteredRoutes.length === 0) {
+      showToast('No operational data found for selected filter range', 'error');
+      return;
+    }
+    exportRoutesToCSV(filteredRoutes);
+    showToast(`Exported ${filteredRoutes.length} route manifests to CSV`, 'success');
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="page-container">
+      {/* Header Banner */}
+      <div className="page-header-row">
         <div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#ffffff' }}>
-            Operational Reports & Metrics (FR-11)
-          </h2>
-          <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
-            Planned route distances, completion ratios, and municipal waste category distribution
+          <h1 className="page-title">Operational Intelligence & Reports</h1>
+          <p className="page-subtitle">
+            Audited municipal performance analytics, fleet mileage, driver productivity, and stream breakdown
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button className="btn btn-secondary btn-sm" onClick={() => window.print()}>
-            <Printer size={15} />
-            <span>Print Report</span>
-          </button>
-          <button className="btn btn-primary btn-sm" onClick={handleExportCSV}>
-            <Download size={15} />
-            <span>Export CSV</span>
+        <div className="page-actions-group">
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleExportCSV}
+          >
+            <Download size={14} />
+            <span>Download CSV Report</span>
           </button>
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="dashboard-metrics-grid">
-        <div className="metric-card">
-          <div className="metric-icon-wrap green">
-            <Truck size={24} />
-          </div>
-          <div className="metric-info">
-            <h4>Total Planned Distance</h4>
-            <div className="metric-value">{stats.totalPlannedKm} km</div>
-            <div className="metric-subtext">Across {stats.totalRoutes} route plans</div>
-          </div>
-        </div>
+      {/* Filter Toolbar Card */}
+      <div className="tailux-card" style={{ marginBottom: '1.5rem' }}>
+        <div className="card-body" style={{ padding: '1rem 1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Calendar size={16} color="var(--primary)" />
+              <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)' }}>Period:</span>
+              <input
+                type="date"
+                className="form-input"
+                style={{ width: 'auto', padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>to</span>
+              <input
+                type="date"
+                className="form-input"
+                style={{ width: 'auto', padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
 
-        <div className="metric-card">
-          <div className="metric-icon-wrap cyan">
-            <Percent size={24} />
-          </div>
-          <div className="metric-info">
-            <h4>Stop Completion Rate</h4>
-            <div className="metric-value">{stats.completionRate}%</div>
-            <div className="metric-subtext">{stats.completedStops} of {stats.totalStops} completed</div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon-wrap amber">
-            <Clock size={24} />
-          </div>
-          <div className="metric-info">
-            <h4>Pending Stops</h4>
-            <div className="metric-value">{stats.pendingStops}</div>
-            <div className="metric-subtext">Scheduled for collection</div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon-wrap purple">
-            <TrendingUp size={24} />
-          </div>
-          <div className="metric-info">
-            <h4>In-Progress Stops</h4>
-            <div className="metric-value">{stats.inProgressStops}</div>
-            <div className="metric-subtext">Live active pickups</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Filter size={16} color="var(--primary)" />
+              <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)' }}>Zone Filter:</span>
+              <select
+                className="form-select"
+                style={{ width: 'auto', padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                value={selectedZone}
+                onChange={(e) => setSelectedZone(e.target.value)}
+              >
+                <option value="All">All Municipal Districts</option>
+                <option value="Downtown Central">Downtown Central</option>
+                <option value="Central Commercial">Central Commercial</option>
+                <option value="East Sector Tech Corridor">East Sector Tech Corridor</option>
+                <option value="North & West Residential">North & West Residential</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Distribution Grids */}
-      <div className="split-view-container">
-        {/* Waste Category Breakdown */}
-        <div className="glass-card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-            <PieChart size={18} color="#06b6d4" />
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff' }}>
-              Waste Stream Distribution
-            </h3>
+      {/* KPI Overview Metrics */}
+      <div className="stat-cards-grid">
+        <div className="metric-card">
+          <div className="metric-top">
+            <span className="metric-label">Dispatched Manifests</span>
+            <div className="metric-icon-box indigo">
+              <Truck size={20} />
+            </div>
           </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            {Object.entries(wasteDistribution).map(([type, count]) => {
-              const pct = Math.round((count / points.length) * 100);
-              return (
-                <div key={type}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', marginBottom: '4px' }}>
-                    <span style={{ color: '#cbd5e1' }}>{type}</span>
-                    <span style={{ fontWeight: 600, color: '#ffffff' }}>
-                      {count} bins ({pct}%)
-                    </span>
-                  </div>
-                  <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.08)', borderRadius: '999px', overflow: 'hidden' }}>
-                    <div
-                      style={{
-                        width: `${pct}%`,
-                        height: '100%',
-                        background:
-                          type.includes('Hazardous')
-                            ? '#ef4444'
-                            : type.includes('Recyclable')
-                            ? '#06b6d4'
-                            : type.includes('Organic')
-                            ? '#10b981'
-                            : '#f59e0b',
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <div className="metric-value">{metrics.totalRoutesCount}</div>
+          <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>In selected window</span>
         </div>
 
-        {/* Area / District Coverage */}
-        <div className="glass-card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-            <MapPin size={18} color="#10b981" />
-            <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff' }}>
-              Municipal Zone Coverage
-            </h3>
+        <div className="metric-card">
+          <div className="metric-top">
+            <span className="metric-label">Stops Collected</span>
+            <div className="metric-icon-box emerald">
+              <CheckCircle2 size={20} />
+            </div>
+          </div>
+          <div className="metric-value">{metrics.completedStops} <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-muted)' }}>/ {metrics.totalStops}</span></div>
+          <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Verified completion</span>
+        </div>
+
+        <div className="metric-card">
+          <div className="metric-top">
+            <span className="metric-label">Fleet Completion Rate</span>
+            <div className="metric-icon-box amber">
+              <TrendingUp size={20} />
+            </div>
+          </div>
+          <div className="metric-value">{metrics.completionRate}%</div>
+          <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Overall efficiency</span>
+        </div>
+
+        <div className="metric-card">
+          <div className="metric-top">
+            <span className="metric-label">Planned Fleet Mileage</span>
+            <div className="metric-icon-box blue">
+              <Compass size={20} />
+            </div>
+          </div>
+          <div className="metric-value">{metrics.totalKm} <span style={{ fontSize: '1rem', fontWeight: 500 }}>km</span></div>
+          <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Road travel distance</span>
+        </div>
+      </div>
+
+      {/* Two Column Section: Driver Productivity & Waste Streams Breakdown */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem', marginBottom: '1.75rem' }}>
+        {/* Driver Productivity Table */}
+        <div className="tailux-card">
+          <div className="card-header">
+            <div>
+              <h2 className="card-title">Driver Operational Productivity</h2>
+              <p className="card-description">Collections verified per driver in this window</p>
+            </div>
           </div>
 
-          <div className="data-table-container">
-            <table className="data-table">
+          <div className="table-responsive">
+            <table className="tailux-table">
               <thead>
                 <tr>
-                  <th>Municipal Zone</th>
-                  <th>Total Bins</th>
-                  <th>Urgent (High)</th>
+                  <th>Driver Name</th>
+                  <th>Routes</th>
+                  <th>Stops Completed</th>
+                  <th>Distance Covered</th>
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(areaDistribution).map(([area, data]) => (
-                  <tr key={area}>
-                    <td style={{ fontWeight: 600, color: '#ffffff' }}>{area}</td>
-                    <td>{data.total}</td>
-                    <td>
-                      <span className={`badge ${data.high > 0 ? 'badge-high' : 'badge-low'}`}>
-                        {data.high} High
-                      </span>
+                {metrics.workersList.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                      No driver records found for this period.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  metrics.workersList.map((worker) => (
+                    <tr key={worker.name}>
+                      <td>
+                        <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{worker.name}</div>
+                      </td>
+                      <td>{worker.routesCount} manifests</td>
+                      <td>
+                        <span className="badge badge-emerald">
+                          {worker.stopsCompleted} stops
+                        </span>
+                      </td>
+                      <td>{worker.totalKm.toFixed(1)} km</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
+          </div>
+        </div>
+
+        {/* Waste Stream Volume Distribution */}
+        <div className="tailux-card">
+          <div className="card-header">
+            <div>
+              <h2 className="card-title">Waste Stream Distribution</h2>
+              <p className="card-description">Collection volume distribution by stream classification</p>
+            </div>
+          </div>
+
+          <div className="card-body">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {Object.entries(metrics.wasteStreamMap).length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                  No collection streams recorded in this date range.
+                </div>
+              ) : (
+                Object.entries(metrics.wasteStreamMap).map(([stream, count]) => {
+                  const pct = metrics.totalStops > 0 ? Math.round((count / metrics.totalStops) * 100) : 0;
+                  return (
+                    <div key={stream}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                        <span style={{ fontWeight: 600, fontSize: '0.84rem', color: 'var(--text-main)' }}>{stream}</span>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{count} stops ({pct}%)</span>
+                      </div>
+                      <div style={{
+                        height: 7,
+                        borderRadius: 'var(--radius-full)',
+                        background: 'var(--border-color)',
+                        overflow: 'hidden',
+                      }}>
+                        <div style={{
+                          width: `${pct}%`,
+                          height: '100%',
+                          background: stream.includes('Organic') ? 'var(--accent-amber)' :
+                                      stream.includes('Recycle') ? 'var(--accent-emerald)' :
+                                      stream.includes('Hazardous') ? 'var(--accent-rose)' :
+                                      'var(--primary)',
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
       </div>

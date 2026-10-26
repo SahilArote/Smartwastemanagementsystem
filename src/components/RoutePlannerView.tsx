@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Route as RouteIcon, 
   Save, 
   ArrowUp, 
   ArrowDown, 
   Trash2, 
-  AlertTriangle, 
-  RotateCcw,
   Sparkles
 } from 'lucide-react';
 import type { CollectionPoint, Route, RouteStop, RoutingResult, UserProfile } from '../types';
@@ -22,6 +19,11 @@ interface RoutePlannerViewProps {
   showToast: (msg: string, type?: 'success' | 'info' | 'error') => void;
 }
 
+const createDefaultRouteName = () => `Route ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} Collection Run`;
+const getTodayDateString = () => new Date().toISOString().split('T')[0];
+const createRouteId = () => `route-${Date.now().toString().slice(-6)}`;
+const getIsoTimestamp = () => new Date().toISOString();
+
 export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
   collectionPoints,
   currentUser,
@@ -30,7 +32,7 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
   showToast,
 }) => {
   const depots = getDepots();
-  const [selectedDepotId, setSelectedDepotId] = useState<string>(depots[0].id);
+  const [selectedDepotId, setSelectedDepotId] = useState<string>(depots[0]?.id || 'depot-central');
   const selectedDepot = depots.find((d) => d.id === selectedDepotId) || depots[0];
 
   const [availableWorkers, setAvailableWorkers] = useState<UserProfile[]>([]);
@@ -57,12 +59,8 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
   // Planning Configuration
   const [prioritizeHigh, setPrioritizeHigh] = useState<boolean>(true);
   const [returnToDepot, setReturnToDepot] = useState<boolean>(false);
-  const [routeName, setRouteName] = useState<string>(
-    `Route ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} Sweep`
-  );
-  const [routeDate, setRouteDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
+  const [routeName, setRouteName] = useState<string>(createDefaultRouteName);
+  const [routeDate, setRouteDate] = useState<string>(getTodayDateString);
 
   // State flags
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
@@ -81,6 +79,12 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
     setHasGenerated(false);
   };
 
+  const handleSelectCritical = () => {
+    const critical = collectionPoints.filter((p) => (p.estimated_fill_percent || 0) >= 70).map((p) => p.id);
+    setSelectedPointIds(critical.length > 0 ? critical : collectionPoints.slice(0, 4).map((p) => p.id));
+    setHasGenerated(false);
+  };
+
   const handleDeselectAll = () => {
     setSelectedPointIds([]);
     setOrderedStops([]);
@@ -88,7 +92,7 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
     setHasGenerated(false);
   };
 
-  // Generate Ordered Route using Nearest-Neighbour + OSRM
+  // Generate Suggested Route using Nearest-Neighbour Heuristic + OSRM
   const handleGenerateRoute = async () => {
     if (selectedPointIds.length < 2) {
       showToast('Please select at least 2 collection points to generate a route', 'error');
@@ -102,7 +106,7 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
         selectedPointIds.includes(p.id)
       );
 
-      // 1. Run Nearest-Neighbour Heuristic Algorithm (PRD Section 8)
+      // 1. Nearest-Neighbour Heuristic Algorithm
       const proposedOrder = calculateNearestNeighbourOrder(
         selectedDepot,
         selectedPointsList,
@@ -111,19 +115,19 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
 
       setOrderedStops(proposedOrder);
 
-      // 2. Request road network geometry and road distance from OSRM
+      // 2. Fetch road network geometry and road distance from OSRM
       const routing = await fetchRoadRoute(selectedDepot, proposedOrder, returnToDepot);
       setRouteResult(routing);
       setHasGenerated(true);
 
       if (routing.isFallback) {
         showToast(
-          routing.error || 'Routing calculated with approximate road estimation fallback.',
+          routing.error || 'Calculated with straight-line road estimation fallback.',
           'info'
         );
       } else {
         showToast(
-          `Optimal road route generated: ${routing.distanceKm} km (${routing.durationMinutes} min)`,
+          `Suggested road route generated: ${routing.distanceKm} km (~${routing.durationMinutes} min drive)`,
           'success'
         );
       }
@@ -174,7 +178,7 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
     }
   };
 
-  // Save Route to Database (FR-08)
+  // Save Route to Database
   const handleSaveRoute = () => {
     if (orderedStops.length < 2) {
       showToast('Cannot save route with less than 2 stops', 'error');
@@ -187,9 +191,10 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
     }
 
     const assignedWorker = availableWorkers.find((p) => p.id === assignedWorkerId);
-    const routeId = `route-${Date.now().toString().slice(-6)}`;
+    const routeId = createRouteId();
+    const currentIso = getIsoTimestamp();
 
-    // Build RouteStops with full snapshot preservation (PRD Section 11)
+    // Build RouteStops with snapshot preservation
     const routeStops: RouteStop[] = orderedStops.map((stop, idx) => ({
       id: `stop-${routeId}-${idx + 1}`,
       route_id: routeId,
@@ -197,7 +202,7 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
       stop_order: idx + 1,
       status: 'Pending',
       completed_at: null,
-      updated_at: new Date().toISOString(),
+      updated_at: currentIso,
       point_name: stop.name,
       point_area: stop.area,
       point_address: stop.address_text,
@@ -211,22 +216,23 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
       id: routeId,
       route_name: routeName.trim(),
       route_date: routeDate,
+      zone: orderedStops[0]?.area || 'Downtown Central',
       depot_name: selectedDepot.name,
       depot_latitude: selectedDepot.latitude,
       depot_longitude: selectedDepot.longitude,
       assigned_worker_id: assignedWorkerId,
-      assigned_worker_name: assignedWorker?.full_name || 'Worker',
+      assigned_worker_name: assignedWorker?.full_name || 'Assigned Driver',
       total_distance_km: routeResult?.distanceKm || null,
       estimated_duration_min: routeResult?.durationMinutes || 45,
       route_geometry: routeResult?.coordinates,
       status: 'Scheduled',
-      created_by: currentUser.id,
-      created_at: new Date().toISOString(),
+      created_by: currentUser.full_name,
+      created_at: currentIso,
       stops: routeStops,
     };
 
     onSaveRoute(newRoute);
-    showToast(`Route "${routeName}" saved & assigned to ${assignedWorker?.full_name}!`, 'success');
+    showToast(`Route "${routeName}" successfully dispatched to ${newRoute.assigned_worker_name}!`, 'success');
     onNavigateToRoutes();
   };
 
@@ -237,350 +243,390 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
   });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-      {/* Route Planner Header & Setup */}
-      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <RouteIcon size={22} color="#10b981" />
-              <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#ffffff' }}>
-                Algorithmic Route Planner
-              </h2>
-            </div>
-            <p style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-              Nearest-Neighbour ordering heuristic with OSRM road network geometry (PRD Section 8)
-            </p>
-          </div>
+    <div className="page-container">
+      {/* Page Header */}
+      <div className="page-header-row">
+        <div>
+          <h1 className="page-title">Algorithmic Route Planner</h1>
+          <p className="page-subtitle">
+            Generate suggested multi-stop pickup routes using OSRM road geometry and heuristic sequencing
+          </p>
+        </div>
 
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div className="page-actions-group">
+          {hasGenerated && (
             <button
-              className="btn btn-primary"
-              onClick={handleGenerateRoute}
-              disabled={isCalculating || selectedPointIds.length < 2}
-              id="btn-generate-route"
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleSaveRoute}
             >
-              {isCalculating ? (
-                <>
-                  <RotateCcw size={16} className="animate-spin" />
-                  <span>Computing Road Route...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles size={16} />
-                  <span>Generate Route ({selectedPointIds.length} stops)</span>
-                </>
-              )}
+              <Save size={14} />
+              <span>Save & Dispatch Route</span>
             </button>
-
-            {hasGenerated && (
-              <button
-                className="btn btn-secondary"
-                onClick={handleSaveRoute}
-                id="btn-save-route-plan"
-                style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', borderColor: 'rgba(16, 185, 129, 0.4)' }}
-              >
-                <Save size={16} />
-                <span>Save & Assign Route</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Input Parameters Form (FR-05, FR-08) */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-subtle)' }}>
-          {/* Starting Depot Selection (FR-05) */}
-          <div>
-            <label className="form-label">Starting Depot / Yard (FR-05)</label>
-            <select
-              className="form-select"
-              value={selectedDepotId}
-              onChange={(e) => {
-                setSelectedDepotId(e.target.value);
-                setHasGenerated(false);
-              }}
-              id="select-depot"
-            >
-              {depots.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Route Name */}
-          <div>
-            <label className="form-label">Route Label / Name</label>
-            <input
-              type="text"
-              className="form-input"
-              value={routeName}
-              onChange={(e) => setRouteName(e.target.value)}
-              placeholder="e.g. Morning Commercial Run"
-            />
-          </div>
-
-          {/* Planned Date */}
-          <div>
-            <label className="form-label">Scheduled Date</label>
-            <input
-              type="date"
-              className="form-input"
-              value={routeDate}
-              onChange={(e) => setRouteDate(e.target.value)}
-            />
-          </div>
-
-          {/* Worker Assignment */}
-          <div>
-            <label className="form-label">Assign Field Worker</label>
-            <select
-              className="form-select"
-              value={assignedWorkerId}
-              onChange={(e) => setAssignedWorkerId(e.target.value)}
-              id="select-worker"
-            >
-              {availableWorkers.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.full_name} ({w.zone || 'Zone'})
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Algorithm Settings & Heuristic Options */}
-        <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center', fontSize: '0.8rem', color: '#94a3b8' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={prioritizeHigh}
-              onChange={(e) => setPrioritizeHigh(e.target.checked)}
-              style={{ accentColor: '#10b981' }}
-            />
-            <span>Prioritize High-Urgency Bins (Weighting Heuristic)</span>
-          </label>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={returnToDepot}
-              onChange={(e) => {
-                setReturnToDepot(e.target.checked);
-                if (orderedStops.length > 0) handleRefreshGeometry(orderedStops);
-              }}
-              style={{ accentColor: '#06b6d4' }}
-            />
-            <span>Round Trip (Return to Starting Depot)</span>
-          </label>
-
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
-            <button className="btn btn-secondary btn-sm" onClick={handleSelectAll}>
-              Select All Bins ({collectionPoints.length})
-            </button>
-            <button className="btn btn-secondary btn-sm" onClick={handleDeselectAll}>
-              Clear Selection
-            </button>
-          </div>
+          )}
         </div>
       </div>
 
-      {/* Main Split Layout: Map Visualization + Ordered Stops (PRD Section 12) */}
-      <div className="split-view-container">
-        {/* Left: Interactive Map with Route Polyline */}
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff' }}>Interactive Route Geometry</h3>
-              <p style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
-                {routeResult
-                  ? `${routeResult.isFallback ? 'Approximate Route' : 'OSRM Road Route'}: ${routeResult.distanceKm} km • ~${routeResult.durationMinutes} min drive`
-                  : 'Select stops and click "Generate Route" to preview path'}
-              </p>
+      {/* Main Grid: Left Configuration & Right Map/Preview */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(340px, 420px) 1fr', gap: '1.5rem', alignItems: 'start' }}>
+        {/* Left Column: Form Controls & Point Selection Checklist */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {/* Step 1: Route Setup Card */}
+          <div className="tailux-card">
+            <div className="card-header">
+              <h2 className="card-title">1. Route Parameters</h2>
             </div>
 
-            {routeResult?.isFallback && (
-              <span className="badge badge-medium" title={routeResult.error}>
-                <AlertTriangle size={12} />
-                <span>Estimate Fallback</span>
-              </span>
-            )}
+            <div className="card-body">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div className="form-group">
+                  <label className="form-label">Route Title</label>
+                  <input
+                    type="text"
+                    required
+                    className="form-input"
+                    value={routeName}
+                    onChange={(e) => setRouteName(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Scheduled Date</label>
+                  <input
+                    type="date"
+                    required
+                    className="form-input"
+                    value={routeDate}
+                    onChange={(e) => setRouteDate(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Launch Facility / Depot</label>
+                  <select
+                    className="form-select"
+                    value={selectedDepotId}
+                    onChange={(e) => {
+                      setSelectedDepotId(e.target.value);
+                      setHasGenerated(false);
+                    }}
+                  >
+                    {depots.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Assign Field Driver</label>
+                  <select
+                    className="form-select"
+                    value={assignedWorkerId}
+                    onChange={(e) => setAssignedWorkerId(e.target.value)}
+                  >
+                    {availableWorkers.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.full_name} ({w.zone || 'Driver'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-color)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={prioritizeHigh}
+                      onChange={(e) => {
+                        setPrioritizeHigh(e.target.checked);
+                        setHasGenerated(false);
+                      }}
+                    />
+                    <span>Prioritize High Fill (&gt;75%) & High Priority bins</span>
+                  </label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={returnToDepot}
+                      onChange={(e) => {
+                        setReturnToDepot(e.target.checked);
+                        setHasGenerated(false);
+                      }}
+                    />
+                    <span>Return to Depot after final stop (Closed Loop)</span>
+                  </label>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <MapView
-            depot={selectedDepot}
-            collectionPoints={collectionPoints.filter((p) => selectedPointIds.includes(p.id))}
-            selectedPointIds={selectedPointIds}
-            stopOrderMap={stopOrderLookup}
-            routeGeometry={routeResult?.coordinates}
-            height="560px"
-          />
+          {/* Step 2: Points Selection Checklist Card */}
+          <div className="tailux-card">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title">2. Select Collection Stops</h2>
+                <p className="card-description">{selectedPointIds.length} stops selected</p>
+              </div>
 
-          {routeResult && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'rgba(0,0,0,0.25)', borderRadius: '8px', fontSize: '0.78rem' }}>
-              <div style={{ color: '#cbd5e1' }}>
-                🛣️ Total Road Distance: <strong style={{ color: '#10b981' }}>{routeResult.distanceKm} km</strong>
-              </div>
-              <div style={{ color: '#cbd5e1' }}>
-                ⏱️ Estimated Transit + Service Time: <strong style={{ color: '#38bdf8' }}>{routeResult.durationMinutes} mins</strong>
-              </div>
-              <div style={{ color: '#94a3b8' }}>
-                📌 Stops Count: <strong style={{ color: '#ffffff' }}>{orderedStops.length}</strong>
+              <div style={{ display: 'flex', gap: '0.35rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleSelectCritical}
+                  title="Select high fill points"
+                >
+                  High Fill
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleSelectAll}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleDeselectAll}
+                >
+                  Clear
+                </button>
               </div>
             </div>
-          )}
+
+            <div className="card-body" style={{ maxHeight: '340px', overflowY: 'auto', padding: '0.5rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                {collectionPoints.map((point) => {
+                  const isSelected = selectedPointIds.includes(point.id);
+                  const stopOrder = stopOrderLookup[point.id];
+
+                  return (
+                    <div
+                      key={point.id}
+                      onClick={() => handleTogglePoint(point.id)}
+                      style={{
+                        padding: '0.65rem 0.75rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid',
+                        borderColor: isSelected ? 'var(--primary-border)' : 'var(--border-color)',
+                        background: isSelected ? 'var(--primary-light)' : 'var(--bg-card)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', minWidth: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {}} // handled by parent div
+                          style={{ pointerEvents: 'none' }}
+                        />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {point.name}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                            {point.area} • {point.waste_type}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                        <span className={`badge ${
+                          point.priority === 'High' ? 'badge-rose' :
+                          point.priority === 'Medium' ? 'badge-amber' :
+                          'badge-emerald'
+                        }`} style={{ fontSize: '0.62rem' }}>
+                          {point.estimated_fill_percent || 50}%
+                        </span>
+                        {stopOrder && (
+                          <span className="badge badge-purple" style={{ fontSize: '0.65rem', fontWeight: 700 }}>
+                            Stop #{stopOrder}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="card-footer">
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ width: '100%' }}
+                disabled={isCalculating || selectedPointIds.length < 2}
+                onClick={handleGenerateRoute}
+              >
+                {isCalculating ? (
+                  'Calculating Road Network...'
+                ) : (
+                  <>
+                    <Sparkles size={16} />
+                    <span>Generate Suggested Road Route</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* Right: Stop Selection & Sequence Panel */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* Ordered Stops List (When Generated) */}
-          {orderedStops.length > 0 && (
-            <div className="glass-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                <div>
-                  <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#ffffff' }}>
-                    Proposed Stop Sequence (FR-06)
-                  </h4>
-                  <p style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-                    Reorder stops using arrows to customize driver order
-                  </p>
-                </div>
-                <span className="badge badge-low">{orderedStops.length} Ordered Stops</span>
+        {/* Right Column: Interactive Map & Turn-by-Turn Stop Sequence */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {/* Interactive Leaflet Map */}
+          <div className="tailux-card">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title">Interactive Road Routing Preview</h2>
+                <p className="card-description">
+                  {routeResult ? (
+                    <span>
+                      Suggested Road Route: <strong>{routeResult.distanceKm} km</strong> • Approx. <strong>{routeResult.durationMinutes} min</strong> driving
+                    </span>
+                  ) : (
+                    <span>OpenStreetMap Vector Tiles & OSRM Routing Engine</span>
+                  )}
+                </p>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '280px', overflowY: 'auto' }}>
-                {orderedStops.map((stop, index) => (
-                  <div
-                    key={stop.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '0.6rem 0.75rem',
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border-subtle)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <div
-                        style={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: '50%',
-                          background: 'linear-gradient(135deg, #06b6d4, #0284c7)',
-                          color: '#ffffff',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                        }}
-                      >
-                        {index + 1}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#ffffff' }}>
-                          {stop.name}
-                        </div>
-                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
-                          {stop.area} • <span style={{ color: '#38bdf8' }}>{stop.waste_type}</span>
-                        </div>
-                      </div>
-                    </div>
+              {routeResult?.isFallback && (
+                <span className="badge badge-amber" style={{ fontSize: '0.68rem' }}>
+                  Approximate Fallback
+                </span>
+              )}
+            </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        disabled={index === 0}
-                        onClick={() => handleMoveStop(index, 'up')}
-                        title="Move Earlier"
-                        style={{ padding: '0.25rem 0.45rem' }}
-                      >
-                        <ArrowUp size={12} />
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        disabled={index === orderedStops.length - 1}
-                        onClick={() => handleMoveStop(index, 'down')}
-                        title="Move Later"
-                        style={{ padding: '0.25rem 0.45rem' }}
-                      >
-                        <ArrowDown size={12} />
-                      </button>
-                      <button
-                        className="btn btn-danger btn-sm"
-                        onClick={() => handleRemoveStopFromRoute(stop.id)}
-                        title="Remove Stop"
-                        style={{ padding: '0.25rem 0.45rem' }}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+            <div style={{ padding: '0.75rem' }}>
+              <MapView
+                depot={selectedDepot}
+                collectionPoints={collectionPoints}
+                selectedPointIds={selectedPointIds}
+                stopOrderMap={stopOrderLookup}
+                routeGeometry={routeResult?.coordinates}
+                height="460px"
+              />
+            </div>
+          </div>
+
+          {/* Ordered Stop Sequence Manifest */}
+          {hasGenerated && orderedStops.length > 0 && (
+            <div className="tailux-card">
+              <div className="card-header">
+                <div>
+                  <h2 className="card-title">Suggested Stop Sequence</h2>
+                  <p className="card-description">Review and adjust driver stop order</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={handleSaveRoute}
+                >
+                  <Save size={14} />
+                  <span>Save Route</span>
+                </button>
+              </div>
+
+              <div className="table-responsive">
+                <table className="tailux-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '60px' }}>Order</th>
+                      <th>Location Name</th>
+                      <th>Area</th>
+                      <th>Waste Stream</th>
+                      <th>Fill %</th>
+                      <th style={{ textAlign: 'right' }}>Sequence Order</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* Launch Depot Row */}
+                    <tr style={{ background: 'var(--bg-subtle)' }}>
+                      <td>
+                        <span className="badge badge-emerald">START</span>
+                      </td>
+                      <td colSpan={4}>
+                        <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                          {selectedDepot.name}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                          {selectedDepot.address}
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right', fontSize: '0.74rem', color: 'var(--text-dim)' }}>
+                        Depot Departure
+                      </td>
+                    </tr>
+
+                    {/* Ordered Stops */}
+                    {orderedStops.map((stop, index) => (
+                      <tr key={stop.id}>
+                        <td>
+                          <span className="badge badge-purple" style={{ fontWeight: 700 }}>
+                            #{index + 1}
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{stop.name}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{stop.address_text}</div>
+                        </td>
+                        <td>{stop.area}</td>
+                        <td>
+                          <span className="badge badge-blue" style={{ fontSize: '0.68rem' }}>
+                            {stop.waste_type}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={`badge ${
+                            stop.priority === 'High' ? 'badge-rose' :
+                            stop.priority === 'Medium' ? 'badge-amber' :
+                            'badge-emerald'
+                          }`}>
+                            {stop.estimated_fill_percent || 50}%
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem' }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={index === 0}
+                              onClick={() => handleMoveStop(index, 'up')}
+                              title="Move Stop Earlier"
+                            >
+                              <ArrowUp size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={index === orderedStops.length - 1}
+                              onClick={() => handleMoveStop(index, 'down')}
+                              title="Move Stop Later"
+                            >
+                              <ArrowDown size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-danger-outline btn-sm"
+                              onClick={() => handleRemoveStopFromRoute(stop.id)}
+                              title="Remove from Route"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
-
-          {/* Collection Points Multi-Select Checklist (FR-05) */}
-          <div className="glass-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#ffffff' }}>
-                Select Stops to Include ({selectedPointIds.length} Selected)
-              </h4>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '380px', overflowY: 'auto' }}>
-              {collectionPoints.map((point) => {
-                const isSelected = selectedPointIds.includes(point.id);
-                return (
-                  <div
-                    key={point.id}
-                    onClick={() => handleTogglePoint(point.id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '0.55rem 0.75rem',
-                      background: isSelected ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255, 255, 255, 0.02)',
-                      border: `1px solid ${isSelected ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-subtle)'}`,
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => {}} // handled by div
-                        style={{ accentColor: '#10b981' }}
-                      />
-                      <div>
-                        <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#ffffff' }}>
-                          {point.name}
-                        </div>
-                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
-                          📍 {point.area}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <span className={`badge badge-${point.priority.toLowerCase()}`} style={{ fontSize: '0.68rem', padding: '0.1rem 0.4rem' }}>
-                        {point.priority}
-                      </span>
-                      <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                        {point.waste_type.split(' ')[0]}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </div>
       </div>
     </div>

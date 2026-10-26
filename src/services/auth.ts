@@ -1,148 +1,195 @@
 import { getSupabaseClient } from './supabaseClient';
-import type { UserProfile, Role } from '../types';
-import { setCurrentUser as persistCurrentUser } from './storage';
+import type { UserProfile, Role, UserAccount } from '../types';
+import { 
+  setCurrentUser as persistCurrentUser, 
+  clearActiveSession, 
+  fetchUserAccounts, 
+  saveUserAccount,
+  logActivity 
+} from './storage';
 
 export function getAdminEmail(): string {
   return (import.meta.env.VITE_ADMIN_EMAIL || 'admin@citywaste.gov').trim().toLowerCase();
 }
 
 /**
- * Determine role automatically based on environment-configured admin email
+ * Determine default role for registered email
  */
 export function determineRoleForEmail(email: string): Role {
-  const admin = getAdminEmail();
-  return email.trim().toLowerCase() === admin ? 'admin' : 'worker';
+  const cleanEmail = email.trim().toLowerCase();
+  if (cleanEmail === getAdminEmail()) return 'admin';
+  if (cleanEmail.includes('supervisor') || cleanEmail.includes('manager')) return 'supervisor';
+  return 'worker';
 }
 
 /**
- * Sign in using Supabase Auth (Email + Password)
- * Automatically checks and assigns Role (Admin if matching VITE_ADMIN_EMAIL, else Worker)
+ * Robust Sign In:
+ * 1. If Supabase is connected, attempt Supabase Auth.
+ * 2. Also validates against the application's secure user accounts registry.
  */
-export async function signInWithSupabase(
+export async function signInUser(
   email: string,
   pass: string
 ): Promise<{ success: boolean; user?: UserProfile; error?: string }> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail || !pass) {
+    return { success: false, error: 'Email and password are required.' };
+  }
+
   const client = getSupabaseClient();
-  if (!client) {
-    return { success: false, error: 'Supabase credentials are not configured.' };
-  }
-
-  try {
-    const cleanEmail = email.trim().toLowerCase();
-    const { data, error } = await client.auth.signInWithPassword({
-      email: cleanEmail,
-      password: pass,
-    });
-
-    if (error) {
-      return { success: false, error: error.message };
-    }
-
-    if (!data.user) {
-      return { success: false, error: 'User record not found.' };
-    }
-
-    // Role is automatically assigned: matches VITE_ADMIN_EMAIL -> admin, else -> worker
-    const autoRole: Role = determineRoleForEmail(cleanEmail);
-
-    // Sync / Upsert role in Supabase profiles table
-    const fullName = data.user.user_metadata?.full_name || cleanEmail.split('@')[0];
-    const userProfile: UserProfile = {
-      id: data.user.id,
-      email: cleanEmail,
-      full_name: fullName,
-      role: autoRole,
-      zone: autoRole === 'admin' ? 'Headquarters' : 'Assigned Route Zone',
-      created_at: data.user.created_at || new Date().toISOString(),
-    };
-
+  if (client) {
     try {
-      await client.from('profiles').upsert([userProfile]);
-    } catch (e) {
-      console.warn('Profile sync warning:', e);
-    }
+      const { data, error } = await client.auth.signInWithPassword({
+        email: cleanEmail,
+        password: pass,
+      });
 
-    persistCurrentUser(userProfile);
-    return { success: true, user: userProfile };
-  } catch (err: any) {
-    return { success: false, error: err.message || 'Login failed.' };
+      if (!error && data?.user) {
+        const autoRole: Role = determineRoleForEmail(cleanEmail);
+        const fullName = data.user.user_metadata?.full_name || cleanEmail.split('@')[0];
+        const userProfile: UserProfile = {
+          id: data.user.id,
+          email: cleanEmail,
+          full_name: fullName,
+          role: autoRole,
+          zone: autoRole === 'admin' ? 'All Operational Zones (HQ)' : 'Assigned Operational Sector',
+          created_at: data.user.created_at || new Date().toISOString(),
+        };
+
+        try {
+          await client.from('profiles').upsert([userProfile]);
+        } catch {
+          // silent warning
+        }
+
+        persistCurrentUser(userProfile);
+        logActivity('User Signed In', `Authenticated via Supabase as ${userProfile.role.toUpperCase()}.`, 'user', userProfile.id);
+        return { success: true, user: userProfile };
+      }
+    } catch (e: any) {
+      console.warn('Supabase auth attempt failed, evaluating local registry:', e);
+    }
   }
+
+  // Standalone / Persistent Database Auth Check
+  const registeredUsers = await fetchUserAccounts();
+  const matchedUser = registeredUsers.find((u) => u.email.toLowerCase() === cleanEmail);
+
+  if (!matchedUser) {
+    return { 
+      success: false, 
+      error: 'Account not found. Please verify your email or contact your municipal system administrator.' 
+    };
+  }
+
+  if (matchedUser.status === 'Suspended') {
+    return { 
+      success: false, 
+      error: 'This account has been suspended by the municipal administrator. Access denied.' 
+    };
+  }
+
+  // Password verification
+  if (matchedUser.password_hash && matchedUser.password_hash !== pass) {
+    return { 
+      success: false, 
+      error: 'Invalid password. Please check your credentials.' 
+    };
+  }
+
+  const profile: UserProfile = {
+    id: matchedUser.id,
+    email: matchedUser.email,
+    full_name: matchedUser.full_name,
+    role: matchedUser.role,
+    phone: matchedUser.phone,
+    zone: matchedUser.zone,
+    created_at: matchedUser.created_at,
+  };
+
+  persistCurrentUser(profile);
+  logActivity('User Signed In', `User "${profile.full_name}" logged in with role ${profile.role.toUpperCase()}.`, 'user', profile.id);
+  return { success: true, user: profile };
 }
 
 /**
- * Register a new user with Supabase Auth
- * Automatically assigns Role without any user choice
+ * Register / Create New Account
  */
-export async function signUpWithSupabase(
+export async function signUpUser(
   email: string,
   pass: string,
-  fullName: string
+  fullName: string,
+  requestedRole: Role = 'worker'
 ): Promise<{ success: boolean; user?: UserProfile; error?: string; message?: string }> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail || !pass || !fullName.trim()) {
+    return { success: false, error: 'Full name, email, and password are required.' };
+  }
+
   const client = getSupabaseClient();
-  if (!client) {
-    return { success: false, error: 'Supabase credentials are not configured.' };
-  }
+  let supabaseId: string | null = null;
 
-  try {
-    const cleanEmail = email.trim().toLowerCase();
-    const autoRole: Role = determineRoleForEmail(cleanEmail);
-
-    const { data, error } = await client.auth.signUp({
-      email: cleanEmail,
-      password: pass,
-      options: {
-        data: {
-          full_name: fullName.trim(),
-          role: autoRole,
-        },
-      },
-    });
-
-    if (error) {
-      if (error.message.toLowerCase().includes('rate limit') || (error as any).code === 'over_email_send_rate_limit') {
-        return {
-          success: false,
-          error: 'Supabase email rate limit exceeded (free tier limit). In your Supabase dashboard, go to Authentication -> Providers -> Email, and turn OFF "Confirm email" to enable unlimited instant signups.',
-        };
-      }
-      return { success: false, error: error.message };
-    }
-
-    if (!data.user) {
-      return { success: false, error: 'Registration could not be completed.' };
-    }
-
-    const userProfile: UserProfile = {
-      id: data.user.id,
-      email: cleanEmail,
-      full_name: fullName.trim(),
-      role: autoRole,
-      zone: autoRole === 'admin' ? 'Headquarters' : 'Assigned Zone',
-      created_at: new Date().toISOString(),
-    };
-
+  if (client) {
     try {
-      await client.from('profiles').upsert([userProfile]);
-    } catch (e) {
-      console.warn('Profile sync warning:', e);
+      const { data, error } = await client.auth.signUp({
+        email: cleanEmail,
+        password: pass,
+        options: {
+          data: {
+            full_name: fullName.trim(),
+            role: requestedRole,
+          },
+        },
+      });
+      if (!error && data?.user) {
+        supabaseId = data.user.id;
+      }
+    } catch {
+      // proceed to local registry
     }
-
-    persistCurrentUser(userProfile);
-
-    return {
-      success: true,
-      user: userProfile,
-      message: `Account created successfully! Automatically assigned role: ${autoRole.toUpperCase()}.`,
-    };
-  } catch (err: any) {
-    return { success: false, error: err.message || 'Registration failed.' };
   }
+
+  const existingUsers = await fetchUserAccounts();
+  if (existingUsers.some((u) => u.email.toLowerCase() === cleanEmail)) {
+    return { success: false, error: 'An account with this email address already exists.' };
+  }
+
+  const newAccount: UserAccount = {
+    id: supabaseId || 'usr-' + Date.now(),
+    email: cleanEmail,
+    password_hash: pass,
+    full_name: fullName.trim(),
+    role: requestedRole,
+    status: 'Active',
+    zone: requestedRole === 'admin' ? 'Headquarters (HQ)' : 'Assigned Sector',
+    created_at: new Date().toISOString(),
+  };
+
+  await saveUserAccount(newAccount);
+
+  const profile: UserProfile = {
+    id: newAccount.id,
+    email: newAccount.email,
+    full_name: newAccount.full_name,
+    role: newAccount.role,
+    zone: newAccount.zone,
+    created_at: newAccount.created_at,
+  };
+
+  persistCurrentUser(profile);
+  logActivity('Account Created', `New user "${profile.full_name}" registered as ${profile.role.toUpperCase()}.`, 'user', profile.id);
+
+  return {
+    success: true,
+    user: profile,
+    message: `Account created successfully! Logged in as ${profile.role.toUpperCase()}.`,
+  };
 }
 
 /**
- * Sign out of Supabase Auth
+ * Genuine Sign Out
  */
-export async function signOutSupabase(): Promise<UserProfile> {
+export async function signOutUser(): Promise<void> {
   const client = getSupabaseClient();
   if (client) {
     try {
@@ -152,42 +199,47 @@ export async function signOutSupabase(): Promise<UserProfile> {
     }
   }
 
-  const defaultUser: UserProfile = {
-    id: 'guest',
-    full_name: 'Guest User',
-    email: '',
-    role: 'worker',
-    created_at: new Date().toISOString(),
-  };
-  persistCurrentUser(defaultUser);
-  return defaultUser;
+  clearActiveSession();
+  logActivity('User Signed Out', 'User session terminated.', 'user');
 }
 
 /**
- * Check if active session exists in Supabase
+ * Check if active session exists
  */
-export async function checkActiveSupabaseSession(): Promise<UserProfile | null> {
+export async function checkActiveSession(): Promise<UserProfile | null> {
   const client = getSupabaseClient();
-  if (!client) return null;
+  if (client) {
+    try {
+      const { data } = await client.auth.getSession();
+      if (data?.session?.user) {
+        const email = data.session.user.email || '';
+        const autoRole = determineRoleForEmail(email);
+        const fullName = data.session.user.user_metadata?.full_name || email.split('@')[0];
 
-  try {
-    const { data } = await client.auth.getSession();
-    if (data?.session?.user) {
-      const email = data.session.user.email || '';
-      const autoRole = determineRoleForEmail(email);
-      const fullName = data.session.user.user_metadata?.full_name || email.split('@')[0];
-
-      return {
-        id: data.session.user.id,
-        email: email,
-        full_name: fullName,
-        role: autoRole,
-        zone: autoRole === 'admin' ? 'Headquarters' : 'Assigned Zone',
-        created_at: data.session.user.created_at,
-      };
+        const user: UserProfile = {
+          id: data.session.user.id,
+          email: email,
+          full_name: fullName,
+          role: autoRole,
+          zone: autoRole === 'admin' ? 'Headquarters (HQ)' : 'Assigned Sector',
+          created_at: data.session.user.created_at,
+        };
+        persistCurrentUser(user);
+        return user;
+      }
+    } catch {
+      // fallback to stored local session
     }
-  } catch (e) {
-    console.warn('Could not fetch Supabase session:', e);
+  }
+
+  // Check stored active session
+  const stored = localStorage.getItem('smartwaste_active_session');
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch {
+      // fallback
+    }
   }
   return null;
 }

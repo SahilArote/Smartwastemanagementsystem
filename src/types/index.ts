@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'worker';
+export type Role = 'admin' | 'supervisor' | 'worker';
 
 export type WasteType = 
   | 'General Waste'
@@ -20,6 +20,37 @@ export interface UserProfile {
   role: Role;
   phone?: string;
   zone?: string;
+  avatar_url?: string;
+  created_at: string;
+}
+
+export interface UserAccount extends UserProfile {
+  password_hash?: string;
+  status: 'Active' | 'Suspended';
+  last_login?: string;
+}
+
+export interface CollectionZone {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  color: string;
+  headquarters_address: string;
+  active_points_count?: number;
+  created_at: string;
+}
+
+export interface CollectionSchedule {
+  id: string;
+  zone_id: string;
+  zone_name: string;
+  days_of_week: string[]; // e.g. ['Mon', 'Wed', 'Fri']
+  time_window: string; // e.g. '07:00 AM - 11:30 AM'
+  frequency: 'Daily' | 'Twice Weekly' | 'Weekly' | 'Bi-Weekly';
+  assigned_vehicle: string;
+  is_active: boolean;
+  notes?: string;
   created_at: string;
 }
 
@@ -27,6 +58,7 @@ export interface CollectionPoint {
   id: string;
   name: string;
   area: string;
+  zone_id?: string;
   address_text: string;
   latitude: number;
   longitude: number;
@@ -38,6 +70,7 @@ export interface CollectionPoint {
   estimated_fill_percent?: number;
   created_by?: string;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface RouteStop {
@@ -63,6 +96,7 @@ export interface Route {
   id: string;
   route_name: string;
   route_date: string; // YYYY-MM-DD
+  zone?: string;
   depot_name: string;
   depot_latitude: number;
   depot_longitude: number;
@@ -74,6 +108,8 @@ export interface Route {
   status: RouteStatus;
   created_by: string;
   created_at: string;
+  completed_at?: string | null;
+  notes?: string;
   stops: RouteStop[];
 }
 
@@ -83,6 +119,7 @@ export interface Depot {
   address: string;
   latitude: number;
   longitude: number;
+  contact_phone?: string;
 }
 
 export interface RoutingResult {
@@ -97,10 +134,35 @@ export interface SystemStats {
   totalPoints: number;
   totalRoutes: number;
   activeRoutes: number;
+  completedRoutes: number;
   totalStops: number;
   completedStops: number;
   inProgressStops: number;
   pendingStops: number;
   completionRate: number;
   totalPlannedKm: number;
+  activeWorkersCount: number;
+  totalZonesCount: number;
+}
+
+export interface ActivityLog {
+  id: string;
+  timestamp: string;
+  user_name: string;
+  user_email: string;
+  user_role: Role;
+  action: string;
+  details: string;
+  entity_type: 'point' | 'route' | 'stop' | 'user' | 'zone' | 'schedule' | 'system';
+  entity_id?: string;
+}
+
+export interface AppNotification {
+  id: string;
+  title: string;
+  message: string;
+  timestamp: string;
+  type: 'info' | 'warning' | 'success' | 'alert';
+  read: boolean;
+  link_tab?: string;
 }

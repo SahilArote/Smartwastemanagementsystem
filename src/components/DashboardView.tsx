@@ -2,16 +2,16 @@ import React from 'react';
 import { 
   MapPin, 
   Route as RouteIcon, 
-  Clock, 
   CheckCircle2, 
+  Compass, 
+  Truck, 
+  ArrowUpRight, 
   Plus, 
-  ArrowRight,
-  Calendar,
-  UserCheck
+  FileDown, 
+  Layers
 } from 'lucide-react';
 import type { CollectionPoint, Route, SystemStats, UserProfile } from '../types';
-import { MapView } from './MapView';
-import { getDepots } from '../services/storage';
+import { fetchActivityLogs, exportRoutesToCSV } from '../services/storage';
 
 interface DashboardViewProps {
   stats: SystemStats;
@@ -30,265 +30,370 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigate,
   onSelectRoute,
 }) => {
-  const depots = getDepots();
-  const primaryDepot = depots[0];
+  const logs = fetchActivityLogs().slice(0, 6);
+  const isWorker = currentUser.role === 'worker';
 
-  // Most recent route
-  const recentRoutes = routes.slice(0, 5);
+  // High fill priority points alert count
+  const criticalPoints = points.filter((p) => (p.estimated_fill_percent || 0) >= 80);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {/* Welcome Banner */}
-      <div 
-        style={{
-          background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 182, 212, 0.08) 100%)',
-          border: '1px solid rgba(16, 185, 129, 0.25)',
-          borderRadius: '16px',
-          padding: '1.5rem',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '1rem',
-        }}
-      >
+    <div className="page-container">
+      {/* Header Banner */}
+      <div className="page-header-row">
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.25rem' }}>
-            <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#ffffff' }}>
-              Welcome back, {currentUser.full_name}
-            </span>
-            <span className={`badge ${currentUser.role === 'admin' ? 'badge-low' : 'badge-inprogress'}`}>
-              {currentUser.role.toUpperCase()}
-            </span>
-          </div>
-          <p style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-            Municipal Smart Waste Central Dispatch • Real-time collection status & route execution
+          <h1 className="page-title">Operational Command Dashboard</h1>
+          <p className="page-subtitle">
+            Municipal fleet operations, route progress, and collection efficiency metrics
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <button className="btn btn-secondary" onClick={() => onNavigate('points')} id="btn-quick-add-point">
-            <Plus size={16} />
-            <span>Add Collection Point</span>
-          </button>
-          <button className="btn btn-primary" onClick={() => onNavigate('planner')} id="btn-quick-plan-route">
-            <RouteIcon size={16} />
-            <span>Plan New Route</span>
-          </button>
+        <div className="page-actions-group">
+          {!isWorker && (
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => exportRoutesToCSV(routes)}
+                title="Download active route records in CSV format"
+              >
+                <FileDown size={14} />
+                <span>Export Manifest</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => onNavigate('planner')}
+              >
+                <Plus size={14} />
+                <span>Plan New Route</span>
+              </button>
+            </>
+          )}
+          {isWorker && (
+            <button
+              type="button"
+              className="btn btn-emerald btn-sm"
+              onClick={() => onNavigate('worker')}
+            >
+              <Truck size={14} />
+              <span>Go to My Active Stops</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Metrics Row (FR-02) */}
-      <div className="dashboard-metrics-grid">
+      {/* KPI Metric Cards Grid */}
+      <div className="stat-cards-grid">
+        {/* Total Points */}
         <div className="metric-card">
-          <div className="metric-icon-wrap green">
-            <MapPin size={24} />
-          </div>
-          <div className="metric-info">
-            <h4>Total Collection Points</h4>
-            <div className="metric-value">{stats.totalPoints}</div>
-            <div className="metric-subtext">Active municipal bins</div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon-wrap cyan">
-            <RouteIcon size={24} />
-          </div>
-          <div className="metric-info">
-            <h4>Saved Routes</h4>
-            <div className="metric-value">{stats.totalRoutes}</div>
-            <div className="metric-subtext">{stats.activeRoutes} Currently In Progress</div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon-wrap amber">
-            <Clock size={24} />
-          </div>
-          <div className="metric-info">
-            <h4>Pending Stops</h4>
-            <div className="metric-value">{stats.pendingStops}</div>
-            <div className="metric-subtext">{stats.inProgressStops} being collected</div>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon-wrap purple">
-            <CheckCircle2 size={24} />
-          </div>
-          <div className="metric-info">
-            <h4>Completed Stops</h4>
-            <div className="metric-value">{stats.completedStops}</div>
-            <div className="metric-subtext">{stats.completionRate}% completion rate</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Split Section: Live Map & Recent Routes */}
-      <div className="split-view-container">
-        {/* Left: Interactive Map Overview (FR-04) */}
-        <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff' }}>Municipal Collection Grid</h3>
-              <p style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Live visualization of collection points & main depot</p>
+          <div className="metric-top">
+            <span className="metric-label">Collection Points</span>
+            <div className="metric-icon-box indigo">
+              <MapPin size={20} />
             </div>
-            <button className="btn btn-secondary btn-sm" onClick={() => onNavigate('planner')}>
-              <span>Full Route Planner</span>
-              <ArrowRight size={14} />
+          </div>
+          <div className="metric-value">{stats.totalPoints}</div>
+          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Registered bins</span>
+            {criticalPoints.length > 0 && (
+              <span className="badge badge-rose" style={{ fontSize: '0.65rem' }}>
+                {criticalPoints.length} High Fill
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Active Routes */}
+        <div className="metric-card">
+          <div className="metric-top">
+            <span className="metric-label">Active Dispatched Routes</span>
+            <div className="metric-icon-box amber">
+              <RouteIcon size={20} />
+            </div>
+          </div>
+          <div className="metric-value">{stats.activeRoutes}</div>
+          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Total: {stats.totalRoutes} planned</span>
+            <span className="badge badge-amber" style={{ fontSize: '0.65rem' }}>In Progress</span>
+          </div>
+        </div>
+
+        {/* Completion Rate */}
+        <div className="metric-card">
+          <div className="metric-top">
+            <span className="metric-label">Stop Completion Rate</span>
+            <div className="metric-icon-box emerald">
+              <CheckCircle2 size={20} />
+            </div>
+          </div>
+          <div className="metric-value">{stats.completionRate}%</div>
+          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+              {stats.completedStops} of {stats.totalStops} completed
+            </span>
+            <span className="metric-trend positive">
+              <ArrowUpRight size={12} />
+              <span>On Schedule</span>
+            </span>
+          </div>
+        </div>
+
+        {/* Planned Distance */}
+        <div className="metric-card">
+          <div className="metric-top">
+            <span className="metric-label">Planned Road Distance</span>
+            <div className="metric-icon-box blue">
+              <Compass size={20} />
+            </div>
+          </div>
+          <div className="metric-value">{stats.totalPlannedKm} <span style={{ fontSize: '1rem', fontWeight: 500 }}>km</span></div>
+          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>OSRM Road Network</span>
+            <span className="badge badge-blue" style={{ fontSize: '0.65rem' }}>Public Routing</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Grid: Fleet Workload & Live Activity Feed */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem', marginBottom: '1.75rem' }}>
+        {/* Fleet Workload Table */}
+        <div className="tailux-card">
+          <div className="card-header">
+            <div>
+              <h2 className="card-title">Active Fleet Operations</h2>
+              <p className="card-description">Dispatched vehicles and driver stop progress</p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => onNavigate('routes')}
+            >
+              View All Routes
             </button>
           </div>
 
-          <MapView
-            depot={primaryDepot}
-            collectionPoints={points}
-            height="420px"
-          />
+          <div className="table-responsive">
+            <table className="tailux-table">
+              <thead>
+                <tr>
+                  <th>Route / Assigned Staff</th>
+                  <th>Stops Progress</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {routes.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                      No routes scheduled for today. Click "Plan New Route" to dispatch.
+                    </td>
+                  </tr>
+                ) : (
+                  routes.slice(0, 5).map((route) => {
+                    const completed = route.stops.filter((s) => s.status === 'Completed').length;
+                    const total = route.stops.length;
+                    const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.75rem', color: '#94a3b8' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#ef4444' }}></span>
-              <span>High Priority</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#f59e0b' }}></span>
-              <span>Medium Priority</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#10b981' }}></span>
-              <span>Low Priority</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6' }}></span>
-              <span>Depot Facility</span>
-            </div>
+                    return (
+                      <tr key={route.id}>
+                        <td>
+                          <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{route.route_name}</div>
+                          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            Driver: <strong>{route.assigned_worker_name || 'Unassigned'}</strong>
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{
+                              flex: 1,
+                              height: 6,
+                              borderRadius: 'var(--radius-full)',
+                              background: 'var(--border-color)',
+                              overflow: 'hidden',
+                              minWidth: 60,
+                            }}>
+                              <div style={{
+                                width: `${percent}%`,
+                                height: '100%',
+                                background: percent === 100 ? 'var(--accent-emerald)' : 'var(--primary)',
+                                transition: 'width 0.3s ease',
+                              }} />
+                            </div>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>
+                              {completed}/{total}
+                            </span>
+                          </div>
+                        </td>
+                        <td>
+                          <span className={`badge ${
+                            route.status === 'Completed' ? 'badge-completed' :
+                            route.status === 'In Progress' ? 'badge-inprogress' :
+                            'badge-scheduled'
+                          }`}>
+                            {route.status}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => {
+                              onSelectRoute(route.id);
+                              onNavigate('routes');
+                            }}
+                          >
+                            Inspect
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        {/* Right: Recent Routes & Operations Summary */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* Active Routes Card */}
-          <div className="glass-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff' }}>Planned & Active Routes</h3>
-              <button className="btn btn-secondary btn-sm" onClick={() => onNavigate('routes')}>
-                <span>View All ({routes.length})</span>
-                <ArrowRight size={14} />
-              </button>
+        {/* Recent Activity Audit Feed */}
+        <div className="tailux-card">
+          <div className="card-header">
+            <div>
+              <h2 className="card-title">Live Operational Audit Feed</h2>
+              <p className="card-description">Verified immutable event history</p>
             </div>
-
-            {recentRoutes.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '2rem 1rem', color: '#94a3b8' }}>
-                <RouteIcon size={36} style={{ margin: '0 auto 0.75rem auto', opacity: 0.4 }} />
-                <p>No routes generated yet.</p>
-                <button className="btn btn-primary btn-sm" style={{ marginTop: '0.75rem' }} onClick={() => onNavigate('planner')}>
-                  Create First Route
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {recentRoutes.map((route) => {
-                  const completed = route.stops.filter((s) => s.status === 'Completed').length;
-                  const total = route.stops.length;
-                  const progressPct = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-                  return (
-                    <div
-                      key={route.id}
-                      onClick={() => {
-                        onSelectRoute(route.id);
-                        onNavigate('routes');
-                      }}
-                      style={{
-                        padding: '0.9rem',
-                        background: 'rgba(255, 255, 255, 0.02)',
-                        border: '1px solid var(--border-subtle)',
-                        borderRadius: '10px',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgba(16, 185, 129, 0.4)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.4rem' }}>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#ffffff' }}>
-                            {route.route_name}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '2px' }}>
-                            <Calendar size={12} />
-                            <span>{route.route_date}</span>
-                            <span>•</span>
-                            <UserCheck size={12} />
-                            <span>{route.assigned_worker_name || 'Unassigned'}</span>
-                          </div>
-                        </div>
-
-                        <span
-                          className={`badge ${
-                            route.status === 'Completed'
-                              ? 'badge-completed'
-                              : route.status === 'In Progress'
-                              ? 'badge-inprogress'
-                              : 'badge-pending'
-                          }`}
-                        >
-                          {route.status}
-                        </span>
-                      </div>
-
-                      {/* Progress Bar */}
-                      <div style={{ marginTop: '0.6rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#94a3b8', marginBottom: '4px' }}>
-                          <span>Stops: {completed} / {total} Completed</span>
-                          <span style={{ fontWeight: 600, color: progressPct === 100 ? '#10b981' : '#06b6d4' }}>
-                            {progressPct}% ({route.total_distance_km ? `${route.total_distance_km} km` : 'Est.'})
-                          </span>
-                        </div>
-                        <div style={{ width: '100%', height: '6px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '999px', overflow: 'hidden' }}>
-                          <div
-                            style={{
-                              width: `${progressPct}%`,
-                              height: '100%',
-                              background: progressPct === 100 ? '#10b981' : 'linear-gradient(90deg, #06b6d4, #10b981)',
-                              transition: 'width 0.3s ease',
-                            }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => onNavigate('audit')}
+            >
+              Full Audit Log
+            </button>
           </div>
 
-          {/* Quick Operations Summary */}
-          <div className="glass-card" style={{ padding: '1.25rem' }}>
-            <h4 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: '#94a3b8', marginBottom: '0.75rem', letterSpacing: '0.04em' }}>
-              Collection Priority Breakdown
-            </h4>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', textAlign: 'center' }}>
-              <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: '8px', padding: '0.75rem 0.5rem' }}>
-                <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f87171' }}>
-                  {points.filter((p) => p.priority === 'High').length}
+          <div className="card-body" style={{ padding: '1rem 1.5rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {logs.map((log) => (
+                <div 
+                  key={log.id} 
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.85rem',
+                    paddingBottom: '0.85rem',
+                    borderBottom: '1px solid var(--border-color)',
+                  }}
+                >
+                  <div style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 'var(--radius-md)',
+                    background: log.entity_type === 'stop' ? 'var(--accent-emerald-light)' :
+                                log.entity_type === 'route' ? 'var(--primary-light)' :
+                                'var(--bg-subtle)',
+                    color: log.entity_type === 'stop' ? 'var(--accent-emerald-text)' :
+                           log.entity_type === 'route' ? 'var(--primary)' :
+                           'var(--text-muted)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    {log.entity_type === 'stop' ? <CheckCircle2 size={16} /> :
+                     log.entity_type === 'route' ? <RouteIcon size={16} /> :
+                     <Layers size={16} />}
+                  </div>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                      <span style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-main)' }}>
+                        {log.action}
+                      </span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+                        {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: 'var(--text-body)', marginBottom: '4px' }}>
+                      {log.details}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      <span>By <strong>{log.user_name}</strong></span>
+                      <span>•</span>
+                      <span className={`badge ${log.user_role === 'admin' ? 'badge-rose' : log.user_role === 'supervisor' ? 'badge-purple' : 'badge-blue'}`} style={{ fontSize: '0.6rem', padding: '0.05rem 0.35rem' }}>
+                        {log.user_role.toUpperCase()}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div style={{ fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>High Priority</div>
-              </div>
-              <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.25)', borderRadius: '8px', padding: '0.75rem 0.5rem' }}>
-                <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fbbf24' }}>
-                  {points.filter((p) => p.priority === 'Medium').length}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Medium Priority</div>
-              </div>
-              <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '8px', padding: '0.75rem 0.5rem' }}>
-                <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#34d399' }}>
-                  {points.filter((p) => p.priority === 'Low').length}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Low Priority</div>
-              </div>
+              ))}
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Municipal Zone Capacity Summary */}
+      <div className="tailux-card">
+        <div className="card-header">
+          <div>
+            <h2 className="card-title">Zone-Level Collection Capacity</h2>
+            <p className="card-description">Bin fill distribution across municipal jurisdictions</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => onNavigate('zones')}
+          >
+            Manage Zones
+          </button>
+        </div>
+
+        <div className="card-body">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+            {['Downtown Central', 'Central Commercial', 'East Sector Tech Corridor', 'North & West Residential'].map((zoneName) => {
+              const zonePoints = points.filter((p) => p.area === zoneName);
+              const avgFill = zonePoints.length > 0
+                ? Math.round(zonePoints.reduce((acc, p) => acc + (p.estimated_fill_percent || 0), 0) / zonePoints.length)
+                : 0;
+              const hasAlert = avgFill >= 75;
+
+              return (
+                <div 
+                  key={zoneName}
+                  style={{
+                    padding: '1rem',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-subtle)',
+                    border: '1px solid var(--border-color)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.84rem', color: 'var(--text-main)' }}>{zoneName}</span>
+                    <span className={`badge ${hasAlert ? 'badge-rose' : 'badge-emerald'}`} style={{ fontSize: '0.65rem' }}>
+                      {avgFill}% Avg Fill
+                    </span>
+                  </div>
+
+                  <div style={{
+                    height: 6,
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--border-color)',
+                    overflow: 'hidden',
+                    marginBottom: '0.65rem',
+                  }}>
+                    <div style={{
+                      width: `${avgFill}%`,
+                      height: '100%',
+                      background: hasAlert ? 'var(--accent-rose)' : 'var(--accent-emerald)',
+                    }} />
+                  </div>
+
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    {zonePoints.length} active collection locations
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

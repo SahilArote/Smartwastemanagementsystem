@@ -37,13 +37,19 @@ export const MapView: React.FC<MapViewProps> = ({
   const routePolylineRef = useRef<L.Polyline | null>(null);
   const tempMarkerRef = useRef<L.Marker | null>(null);
 
+  const onMapClickRef = useRef(onMapClick);
+  useEffect(() => {
+    onMapClickRef.current = onMapClick;
+  }, [onMapClick]);
+
   // Initialize Map
   useEffect(() => {
-    if (!mapContainerRef.current) return;
+    const container = mapContainerRef.current;
+    if (!container) return;
 
     // Reset container if Leaflet left an ID
-    if ((mapContainerRef.current as any)._leaflet_id) {
-      (mapContainerRef.current as any)._leaflet_id = null;
+    if ((container as any)._leaflet_id) {
+      (container as any)._leaflet_id = null;
     }
 
     if (!mapInstanceRef.current) {
@@ -51,7 +57,7 @@ export const MapView: React.FC<MapViewProps> = ({
         ? [depot.latitude, depot.longitude]
         : center;
 
-      const map = L.map(mapContainerRef.current, {
+      const map = L.map(container, {
         center: initialCenter,
         zoom: zoom,
         zoomControl: true,
@@ -77,8 +83,8 @@ export const MapView: React.FC<MapViewProps> = ({
 
       // Handle map clicks
       map.on('click', (e: L.LeafletMouseEvent) => {
-        if (onMapClick) {
-          onMapClick(Number(e.latlng.lat.toFixed(6)), Number(e.latlng.lng.toFixed(6)));
+        if (onMapClickRef.current) {
+          onMapClickRef.current(Number(e.latlng.lat.toFixed(6)), Number(e.latlng.lng.toFixed(6)));
         }
       });
     }
@@ -88,10 +94,11 @@ export const MapView: React.FC<MapViewProps> = ({
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
-      if (mapContainerRef.current) {
-        (mapContainerRef.current as any)._leaflet_id = null;
+      if (container) {
+        (container as any)._leaflet_id = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update cursor based on pickMode

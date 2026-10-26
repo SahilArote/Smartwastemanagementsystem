@@ -1,71 +1,110 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { 
   fetchCollectionPoints, 
   fetchRoutes, 
   getCurrentUser, 
-  setCurrentUser as persistCurrentUser,
   computeSystemStats, 
   saveCollectionPoint, 
   deleteCollectionPoint, 
   saveNewRoute, 
   updateStopStatus 
 } from './services/storage';
-import { checkActiveSupabaseSession } from './services/auth';
+import { checkActiveSession, signOutUser } from './services/auth';
+import { getSavedSupabaseConfig } from './services/supabaseClient';
 import type { CollectionPoint, Route, StopStatus, UserProfile } from './types';
-import { Navbar } from './components/Navbar';
+
+// Layout Components
+import { Sidebar } from './components/Sidebar';
+import { Header } from './components/Header';
+import { SignInView } from './components/SignInView';
+
+// Views
 import { DashboardView } from './components/DashboardView';
 import { CollectionPointsView } from './components/CollectionPointsView';
+import { ZonesAndSchedulesView } from './components/ZonesAndSchedulesView';
 import { RoutePlannerView } from './components/RoutePlannerView';
 import { SavedRoutesView } from './components/SavedRoutesView';
 import { WorkerPortalView } from './components/WorkerPortalView';
 import { ReportsView } from './components/ReportsView';
+import { ActivityAuditView } from './components/ActivityAuditView';
+import { UsersManagementView } from './components/UsersManagementView';
+import { ProfileView } from './components/ProfileView';
+
+// Modals & Notifications
 import { SupabaseConfigModal } from './components/SupabaseConfigModal';
-import { AuthModal } from './components/AuthModal';
 import { ToastContainer } from './components/Toast';
 import type { ToastMessage } from './components/Toast';
 
 export function App() {
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => getCurrentUser());
   const [activeTab, setActiveTab] = useState<string>('dashboard');
-  const [currentUser, setCurrentUserState] = useState<UserProfile>(getCurrentUser());
+
+  // App Layout State
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    return localStorage.getItem('smartwaste_theme') === 'dark' || true; // default dark/slate
+  });
+
+  // Data State
   const [points, setPoints] = useState<CollectionPoint[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+
+  // Modals & Toasts
   const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState<boolean>(false);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // Load Data directly from Supabase Database
-  const refreshData = async () => {
+  // Sync theme to HTML attribute
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('smartwaste_theme', 'dark');
+    } else {
+      document.documentElement.setAttribute('data-theme', 'light');
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('smartwaste_theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  // Load and refresh persisted data
+  const refreshData = useCallback(async () => {
     try {
       const loadedPoints = await fetchCollectionPoints();
       const loadedRoutes = await fetchRoutes();
       setPoints(loadedPoints);
       setRoutes(loadedRoutes);
-      if (!selectedRouteId && loadedRoutes.length > 0) {
-        setSelectedRouteId(loadedRoutes[0].id);
-      }
+      setSelectedRouteId((prev) => (prev ? prev : (loadedRoutes[0]?.id || null)));
     } catch (e) {
       console.warn('Error refreshing database data:', e);
     }
-  };
-
-  useEffect(() => {
-    refreshData();
-
-    // Check if an authenticated Supabase user session exists
-    checkActiveSupabaseSession().then((sessionUser) => {
-      if (sessionUser) {
-        setCurrentUserState(sessionUser);
-        persistCurrentUser(sessionUser);
-      }
-    });
   }, []);
 
-  const handleSetCurrentUser = (user: UserProfile) => {
-    persistCurrentUser(user);
-    setCurrentUserState(user);
-    showToast(`Active profile: ${user.full_name} (${user.role.toUpperCase()})`, 'info');
-  };
+  useEffect(() => {
+    let isMounted = true;
+    Promise.all([fetchCollectionPoints(), fetchRoutes()]).then(([loadedPoints, loadedRoutes]) => {
+      if (isMounted) {
+        setPoints(loadedPoints);
+        setRoutes(loadedRoutes);
+        setSelectedRouteId((prev) => (prev ? prev : (loadedRoutes[0]?.id || null)));
+      }
+    });
+
+    checkActiveSession().then((sessionUser) => {
+      if (isMounted && sessionUser) {
+        setCurrentUser(sessionUser);
+        if (sessionUser.role === 'worker') {
+          setActiveTab('worker');
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const showToast = (text: string, type: 'success' | 'info' | 'error' = 'info') => {
     const id = Date.now().toString() + Math.random().toString();
@@ -77,6 +116,23 @@ export function App() {
 
   const handleDismissToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const handleLoginSuccess = (user: UserProfile) => {
+    setCurrentUser(user);
+    if (user.role === 'worker') {
+      setActiveTab('worker');
+    } else {
+      setActiveTab('dashboard');
+    }
+    refreshData();
+  };
+
+  const handleSignOut = async () => {
+    await signOutUser();
+    setCurrentUser(null);
+    setActiveTab('dashboard');
+    showToast('Signed out of operational session', 'info');
   };
 
   // Database-backed Point Handlers
@@ -113,80 +169,153 @@ export function App() {
   };
 
   const stats = computeSystemStats(points, routes);
+  const { url } = getSavedSupabaseConfig();
+  const isSupabaseConfigured = Boolean(url && url.length > 5);
+
+  // If unauthenticated: render dedicated Tailux SignIn page
+  if (!currentUser) {
+    return (
+      <>
+        <SignInView 
+          onLoginSuccess={handleLoginSuccess}
+          showToast={showToast}
+        />
+        <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
+      </>
+    );
+  }
+
+  // Role Access Guard:
+  // If a worker tries to open restricted admin views, divert to worker portal
+  const effectiveTab = (currentUser.role === 'worker' && ['points', 'zones', 'schedules', 'planner', 'users'].includes(activeTab))
+    ? 'worker'
+    : activeTab;
 
   return (
-    <div className="app-container">
-      {/* Navigation Header */}
-      <Navbar
-        activeTab={activeTab}
+    <div className="app-layout">
+      {/* Collapsible Tailux Sidebar */}
+      <Sidebar
+        activeTab={effectiveTab}
         setActiveTab={setActiveTab}
         currentUser={currentUser}
-        onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
-        onOpenAuthModal={() => setIsAuthModalOpen(true)}
-        onDataRefresh={refreshData}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+        isMobileOpen={isMobileSidebarOpen}
+        onCloseMobile={() => setIsMobileSidebarOpen(false)}
+        stats={{
+          totalPoints: stats.totalPoints,
+          activeRoutes: stats.activeRoutes,
+          pendingStops: stats.pendingStops,
+        }}
       />
 
-      {/* Main Workspace Body */}
-      <main className="main-content">
-        {activeTab === 'dashboard' && (
-          <DashboardView
-            stats={stats}
-            points={points}
-            routes={routes}
-            currentUser={currentUser}
-            onNavigate={setActiveTab}
-            onSelectRoute={(id) => setSelectedRouteId(id)}
-          />
-        )}
+      {/* Main App Container */}
+      <div className={`app-main ${isSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        {/* Tailux Sticky Header */}
+        <Header
+          activeTab={effectiveTab}
+          setActiveTab={setActiveTab}
+          currentUser={currentUser}
+          onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
+          onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
+          onSignOut={handleSignOut}
+          isDarkMode={isDarkMode}
+          onToggleTheme={() => setIsDarkMode(!isDarkMode)}
+          isSupabaseConfigured={isSupabaseConfigured}
+        />
 
-        {activeTab === 'points' && (
-          <CollectionPointsView
-            points={points}
-            onAddPoint={handleAddPoint}
-            onUpdatePoint={handleUpdatePoint}
-            onDeletePoint={handleDeletePoint}
-            showToast={showToast}
-          />
-        )}
+        {/* Dynamic View Display */}
+        <main style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          {effectiveTab === 'dashboard' && (
+            <DashboardView
+              stats={stats}
+              points={points}
+              routes={routes}
+              currentUser={currentUser}
+              onNavigate={setActiveTab}
+              onSelectRoute={(id) => setSelectedRouteId(id)}
+            />
+          )}
 
-        {activeTab === 'planner' && (
-          <RoutePlannerView
-            collectionPoints={points}
-            currentUser={currentUser}
-            onSaveRoute={handleSaveRoute}
-            onNavigateToRoutes={() => setActiveTab('routes')}
-            showToast={showToast}
-          />
-        )}
+          {effectiveTab === 'points' && (
+            <CollectionPointsView
+              points={points}
+              onAddPoint={handleAddPoint}
+              onUpdatePoint={handleUpdatePoint}
+              onDeletePoint={handleDeletePoint}
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'routes' && (
-          <SavedRoutesView
-            routes={routes}
-            selectedRouteId={selectedRouteId}
-            onSelectRouteId={setSelectedRouteId}
-            onUpdateStopStatus={handleUpdateStopStatus}
-            showToast={showToast}
-          />
-        )}
+          {effectiveTab === 'zones' && (
+            <ZonesAndSchedulesView
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'worker' && (
-          <WorkerPortalView
-            currentUser={currentUser}
-            routes={routes}
-            onUpdateStopStatus={handleUpdateStopStatus}
-            showToast={showToast}
-          />
-        )}
+          {effectiveTab === 'schedules' && (
+            <ZonesAndSchedulesView
+              showToast={showToast}
+            />
+          )}
 
-        {activeTab === 'reports' && (
-          <ReportsView
-            stats={stats}
-            points={points}
-            routes={routes}
-            showToast={showToast}
-          />
-        )}
-      </main>
+          {effectiveTab === 'planner' && (
+            <RoutePlannerView
+              collectionPoints={points}
+              currentUser={currentUser}
+              onSaveRoute={handleSaveRoute}
+              onNavigateToRoutes={() => setActiveTab('routes')}
+              showToast={showToast}
+            />
+          )}
+
+          {effectiveTab === 'routes' && (
+            <SavedRoutesView
+              routes={routes}
+              selectedRouteId={selectedRouteId}
+              onSelectRouteId={setSelectedRouteId}
+              onUpdateStopStatus={handleUpdateStopStatus}
+              showToast={showToast}
+              onRefreshData={refreshData}
+            />
+          )}
+
+          {effectiveTab === 'worker' && (
+            <WorkerPortalView
+              currentUser={currentUser}
+              routes={routes}
+              onUpdateStopStatus={handleUpdateStopStatus}
+              showToast={showToast}
+            />
+          )}
+
+          {effectiveTab === 'reports' && (
+            <ReportsView
+              routes={routes}
+              showToast={showToast}
+            />
+          )}
+
+          {effectiveTab === 'audit' && (
+            <ActivityAuditView
+              showToast={showToast}
+            />
+          )}
+
+          {effectiveTab === 'users' && (
+            <UsersManagementView
+              currentUser={currentUser}
+              showToast={showToast}
+            />
+          )}
+
+          {effectiveTab === 'profile' && (
+            <ProfileView
+              currentUser={currentUser}
+            />
+          )}
+        </main>
+      </div>
 
       {/* Supabase & Cloud Settings Modal */}
       <SupabaseConfigModal
@@ -198,16 +327,7 @@ export function App() {
         }}
       />
 
-      {/* Supabase Auth & Automatic RBAC Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        currentUser={currentUser}
-        onUserChange={handleSetCurrentUser}
-        showToast={showToast}
-      />
-
-      {/* Floating Toast Notification Container */}
+      {/* Toast Notification Container */}
       <ToastContainer toasts={toasts} onDismiss={handleDismissToast} />
     </div>
   );
