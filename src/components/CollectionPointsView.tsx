@@ -7,12 +7,17 @@ import {
   Trash2, 
   MapPin, 
   X, 
-  ChevronLeft,
-  ChevronRight,
-  ArrowUpDown
+  ChevronLeft, 
+  ChevronRight, 
+  ArrowUpDown,
+  Check,
+  Table,
+  Map as MapIcon
 } from 'lucide-react';
 import type { CollectionPoint, WasteType, Priority } from '../types';
 import { exportPointsToCSV } from '../services/storage';
+import { PointPickerMap } from './PointPickerMap';
+import { MapView } from './MapView';
 
 interface CollectionPointsViewProps {
   points: CollectionPoint[];
@@ -40,6 +45,13 @@ const ZONES = [
   'North & West Residential',
 ];
 
+const ZONE_DEFAULT_COORDS: Record<string, { lat: number; lng: number }> = {
+  'Downtown Central': { lat: 18.5204, lng: 73.8567 },
+  'Central Commercial': { lat: 18.5248, lng: 73.8436 },
+  'East Sector Tech Corridor': { lat: 18.5368, lng: 73.8935 },
+  'North & West Residential': { lat: 18.5412, lng: 73.8291 },
+};
+
 export const CollectionPointsView: React.FC<CollectionPointsViewProps> = ({
   points,
   onAddPoint,
@@ -47,6 +59,7 @@ export const CollectionPointsView: React.FC<CollectionPointsViewProps> = ({
   onDeletePoint,
   showToast,
 }) => {
+  const [viewMode, setViewMode] = useState<'table' | 'map'>('table');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedZone, setSelectedZone] = useState('All Zones');
   const [selectedWasteType, setSelectedWasteType] = useState('All Types');
@@ -190,6 +203,28 @@ export const CollectionPointsView: React.FC<CollectionPointsViewProps> = ({
         </div>
 
         <div className="page-actions-group">
+          {/* Table vs Map View Toggle */}
+          <div className="view-mode-toggle">
+            <button
+              type="button"
+              className={`view-mode-btn ${viewMode === 'table' ? 'active' : ''}`}
+              onClick={() => setViewMode('table')}
+              title="Table Grid View"
+            >
+              <Table size={13} />
+              <span>Table</span>
+            </button>
+            <button
+              type="button"
+              className={`view-mode-btn ${viewMode === 'map' ? 'active' : ''}`}
+              onClick={() => setViewMode('map')}
+              title="City Map View"
+            >
+              <MapIcon size={13} />
+              <span>City Map</span>
+            </button>
+          </div>
+
           <button
             type="button"
             className="btn btn-secondary btn-sm"
@@ -211,7 +246,7 @@ export const CollectionPointsView: React.FC<CollectionPointsViewProps> = ({
         </div>
       </div>
 
-      {/* Main Table Card */}
+      {/* Main Content Card (Table or City Map) */}
       <div className="tailux-card">
         {/* Table Toolbar & Filters */}
         <div className="table-toolbar">
@@ -289,331 +324,475 @@ export const CollectionPointsView: React.FC<CollectionPointsViewProps> = ({
           </div>
         </div>
 
-        {/* Data Table */}
-        <div className="table-responsive">
-          <table className="tailux-table">
-            <thead>
-              <tr>
-                <th style={{ width: '28%' }}>Point Details & Address</th>
-                <th>Zone / Sector</th>
-                <th>Waste Classification</th>
-                <th>Priority</th>
-                <th>Fill Level</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedPoints.length === 0 ? (
-                <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-                    No collection points matched your search criteria.
-                  </td>
-                </tr>
-              ) : (
-                paginatedPoints.map((point) => {
-                  const fill = point.estimated_fill_percent || 0;
-                  const isHighFill = fill >= 80;
-
-                  return (
-                    <tr key={point.id}>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.65rem' }}>
-                          <div style={{
-                            width: 32,
-                            height: 32,
-                            borderRadius: 'var(--radius-sm)',
-                            background: isHighFill ? 'var(--accent-rose-light)' : 'var(--primary-light)',
-                            color: isHighFill ? 'var(--accent-rose-text)' : 'var(--primary)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flexShrink: 0,
-                            marginTop: '2px',
-                          }}>
-                            <MapPin size={16} />
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.86rem' }}>
-                              {point.name}
-                            </div>
-                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                              {point.address_text}
-                            </div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '2px' }}>
-                              Coord: {point.latitude.toFixed(4)}, {point.longitude.toFixed(4)} • {point.bin_capacity_liters || 240}L Capacity
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-
-                      <td>
-                        <span style={{ fontWeight: 500, fontSize: '0.82rem' }}>{point.area}</span>
-                      </td>
-
-                      <td>
-                        <span className="badge badge-purple" style={{ fontSize: '0.7rem' }}>
-                          {point.waste_type}
-                        </span>
-                      </td>
-
-                      <td>
-                        <span className={`badge ${
-                          point.priority === 'High' ? 'badge-rose' :
-                          point.priority === 'Medium' ? 'badge-amber' :
-                          'badge-emerald'
-                        }`}>
-                          {point.priority}
-                        </span>
-                      </td>
-
-                      <td style={{ minWidth: 140 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <div style={{
-                            flex: 1,
-                            height: 7,
-                            borderRadius: 'var(--radius-full)',
-                            background: 'var(--border-color)',
-                            overflow: 'hidden',
-                          }}>
-                            <div style={{
-                              width: `${fill}%`,
-                              height: '100%',
-                              background: isHighFill ? 'var(--accent-rose)' : fill > 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)',
-                              transition: 'width 0.3s ease',
-                            }} />
-                          </div>
-                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: isHighFill ? 'var(--accent-rose)' : 'var(--text-main)' }}>
-                            {fill}%
-                          </span>
-                        </div>
-                      </td>
-
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem' }}>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => handleOpenEdit(point)}
-                            title="Edit Point"
-                          >
-                            <Edit3 size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-danger-outline btn-sm"
-                            onClick={() => {
-                              setDeletingId(point.id);
-                              setIsDeleteConfirmOpen(true);
-                            }}
-                            title="Delete Point"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+        {/* View Mode Switch: Map or Table */}
+        {viewMode === 'map' ? (
+          <div style={{ padding: '0.85rem' }}>
+            <div style={{ marginBottom: '0.65rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                Displaying <strong>{filteredPoints.length}</strong> collection points across the city
+              </span>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
+                💡 Click any pin to inspect point details or edit location
+              </span>
+            </div>
+            <MapView
+              collectionPoints={filteredPoints}
+              height="540px"
+              onSelectPoint={(point) => handleOpenEdit(point)}
+            />
+          </div>
+        ) : (
+          <>
+            {/* Data Table */}
+            <div className="table-responsive">
+              <table className="tailux-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '28%' }}>Point Details & Address</th>
+                    <th>Zone / Sector</th>
+                    <th>Waste Classification</th>
+                    <th>Priority</th>
+                    <th>Fill Level</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedPoints.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+                        No collection points matched your search criteria.
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                  ) : (
+                    paginatedPoints.map((point) => {
+                      const fill = point.estimated_fill_percent || 0;
+                      const isHighFill = fill >= 80;
 
-        {/* Pagination Footer */}
-        <div className="table-pagination">
-          <div>
-            Showing <strong>{filteredPoints.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1}</strong> to <strong>{Math.min(currentPage * itemsPerPage, filteredPoints.length)}</strong> of <strong>{filteredPoints.length}</strong> collection points
-          </div>
+                      return (
+                        <tr key={point.id}>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.65rem' }}>
+                              <div style={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: 'var(--radius-sm)',
+                                background: isHighFill ? 'var(--accent-rose-light)' : 'var(--primary-light)',
+                                color: isHighFill ? 'var(--accent-rose-text)' : 'var(--primary)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0,
+                                marginTop: '2px',
+                              }}>
+                                <MapPin size={16} />
+                              </div>
+                              <div>
+                                <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.86rem' }}>
+                                  {point.name}
+                                </div>
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                  {point.address_text}
+                                </div>
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '2px' }}>
+                                  Coord: {point.latitude.toFixed(4)}, {point.longitude.toFixed(4)} • {point.bin_capacity_liters || 240}L Capacity
+                                </div>
+                              </div>
+                            </div>
+                          </td>
 
-          <div className="pagination-controls">
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => p - 1)}
-            >
-              <ChevronLeft size={14} />
-              <span>Previous</span>
-            </button>
-            <span style={{ padding: '0 0.5rem', fontWeight: 600 }}>
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => p + 1)}
-            >
-              <span>Next</span>
-              <ChevronRight size={14} />
-            </button>
-          </div>
-        </div>
+                          <td>
+                            <span style={{ fontWeight: 500, fontSize: '0.82rem' }}>{point.area}</span>
+                          </td>
+
+                          <td>
+                            <span className="badge badge-purple" style={{ fontSize: '0.7rem' }}>
+                              {point.waste_type}
+                            </span>
+                          </td>
+
+                          <td>
+                            <span className={`badge ${
+                              point.priority === 'High' ? 'badge-rose' :
+                              point.priority === 'Medium' ? 'badge-amber' :
+                              'badge-emerald'
+                            }`}>
+                              {point.priority}
+                            </span>
+                          </td>
+
+                          <td style={{ minWidth: 140 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <div style={{
+                                flex: 1,
+                                height: 7,
+                                borderRadius: 'var(--radius-full)',
+                                background: 'var(--border-color)',
+                                overflow: 'hidden',
+                              }}>
+                                <div style={{
+                                  width: `${fill}%`,
+                                  height: '100%',
+                                  background: isHighFill ? 'var(--accent-rose)' : fill > 50 ? 'var(--accent-amber)' : 'var(--accent-emerald)',
+                                  transition: 'width 0.3s ease',
+                                }} />
+                              </div>
+                              <span style={{ fontSize: '0.76rem', fontWeight: 700, color: isHighFill ? 'var(--accent-rose)' : 'var(--text-main)' }}>
+                                {fill}%
+                              </span>
+                            </div>
+                          </td>
+
+                          <td style={{ textAlign: 'right' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem' }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => handleOpenEdit(point)}
+                                title="Edit Point"
+                              >
+                                <Edit3 size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-danger-outline btn-sm"
+                                onClick={() => {
+                                  setDeletingId(point.id);
+                                  setIsDeleteConfirmOpen(true);
+                                }}
+                                title="Delete Point"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Footer */}
+            <div className="table-pagination">
+              <div>
+                Showing <strong>{filteredPoints.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1}</strong> to <strong>{Math.min(currentPage * itemsPerPage, filteredPoints.length)}</strong> of <strong>{filteredPoints.length}</strong> collection points
+              </div>
+
+              <div className="pagination-controls">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => p - 1)}
+                >
+                  <ChevronLeft size={14} />
+                  <span>Previous</span>
+                </button>
+                <span style={{ padding: '0 0.5rem', fontWeight: 600 }}>
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => p + 1)}
+                >
+                  <span>Next</span>
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Add / Edit Point Modal */}
+      {/* Add / Edit Point Modal with Interactive Map and Sticky Submit Button */}
       {isModalOpen && (
         <div className="modal-backdrop" onClick={() => setIsModalOpen(false)}>
           <div 
-            className="modal-card" 
-            style={{ maxWidth: 620 }}
+            className="modal-card modal-card-wide" 
+            style={{ maxWidth: 1040, width: '96vw' }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
-              <h3 className="modal-title">
-                {editingPoint ? 'Edit Collection Location' : 'Register New Collection Location'}
-              </h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--primary-light)',
+                  color: 'var(--primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}>
+                  <MapPin size={20} />
+                </div>
+                <div>
+                  <h3 className="modal-title">
+                    {editingPoint ? 'Edit Collection Location' : 'Register New Collection Location'}
+                  </h3>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+                    Pinpoint the waste receptacle on the map and configure operational parameters
+                  </p>
+                </div>
+              </div>
               <button 
                 type="button" 
                 className="btn btn-flat btn-icon-only"
                 onClick={() => setIsModalOpen(false)}
+                title="Close modal"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleFormSubmit}>
-              <div className="modal-body">
-                <div className="form-grid">
-                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                    <label className="form-label">
-                      Location / Facility Name <span className="required">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      className="form-input"
-                      placeholder="e.g. City Hall Civic Promenade"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            <form onSubmit={handleFormSubmit} className="modal-form" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <div className="modal-body" style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }}>
+                <div className="collection-modal-grid">
+                  {/* LEFT COLUMN: Location Details */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.95rem' }}>
+                    <div className="form-group">
+                      <label className="form-label">
+                        Location / Facility Name <span className="required">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        className="form-input"
+                        placeholder="e.g. City Hall Civic Promenade"
+                        value={formData.name}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">
+                        Street Address <span className="required">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        className="form-input"
+                        placeholder="e.g. 100 Municipal Square, Central Plaza"
+                        value={formData.address_text}
+                        onChange={(e) => setFormData({ ...formData, address_text: e.target.value })}
+                      />
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                      <div className="form-group">
+                        <label className="form-label">Jurisdictional Zone</label>
+                        <select
+                          className="form-select"
+                          value={formData.area}
+                          onChange={(e) => {
+                            const newArea = e.target.value;
+                            const coords = ZONE_DEFAULT_COORDS[newArea];
+                            setFormData((prev) => ({
+                              ...prev,
+                              area: newArea,
+                              ...(coords ? { latitude: coords.lat, longitude: coords.lng } : {}),
+                            }));
+                          }}
+                        >
+                          {ZONES.filter((z) => z !== 'All Zones').map((z) => (
+                            <option key={z} value={z}>{z}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Waste Stream Type</label>
+                        <select
+                          className="form-select"
+                          value={formData.waste_type}
+                          onChange={(e) => setFormData({ ...formData, waste_type: e.target.value as WasteType })}
+                        >
+                          {WASTE_TYPES.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                      <div className="form-group">
+                        <label className="form-label">Collection Priority</label>
+                        <select
+                          className="form-select"
+                          value={formData.priority}
+                          onChange={(e) => setFormData({ ...formData, priority: e.target.value as Priority })}
+                        >
+                          {PRIORITIES.map((p) => (
+                            <option key={p} value={p}>{p} Priority</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Receptacle Capacity (Liters)</label>
+                        <input
+                          type="number"
+                          min={120}
+                          max={1200}
+                          step={60}
+                          className="form-input"
+                          value={formData.bin_capacity_liters}
+                          onChange={(e) => setFormData({ ...formData, bin_capacity_liters: Number(e.target.value) })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-group">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Estimated Fill Level
+                        </label>
+                        <span style={{ 
+                          fontSize: '0.78rem', 
+                          fontWeight: 700, 
+                          color: formData.estimated_fill_percent >= 80 
+                            ? 'var(--accent-rose)' 
+                            : formData.estimated_fill_percent > 50 
+                            ? 'var(--accent-amber)' 
+                            : 'var(--accent-emerald)'
+                        }}>
+                          {formData.estimated_fill_percent}% Full
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={formData.estimated_fill_percent}
+                        onChange={(e) => setFormData({ ...formData, estimated_fill_percent: Number(e.target.value) })}
+                        style={{ width: '100%', cursor: 'pointer' }}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Operational Notes (Optional)</label>
+                      <textarea
+                        className="form-textarea"
+                        rows={2}
+                        placeholder="Access restrictions, gate keys, or specific driver instructions..."
+                        value={formData.notes}
+                        onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* RIGHT COLUMN: Interactive Leaflet Map Picker & Coordinate Sync */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                    <div>
+                      <label className="form-label" style={{ fontWeight: 700, color: 'var(--text-main)', margin: '0 0 2px 0' }}>
+                        Pinpoint Location on Map
+                      </label>
+                      <p style={{ fontSize: '0.73rem', color: 'var(--text-muted)', margin: 0 }}>
+                        Click anywhere or drag the purple pin to set exact coordinates
+                      </p>
+                    </div>
+
+                    {/* Interactive Leaflet Point Picker */}
+                    <PointPickerMap
+                      latitude={formData.latitude}
+                      longitude={formData.longitude}
+                      onChangeCoordinates={(lat, lng) => {
+                        setFormData((prev) => ({ ...prev, latitude: lat, longitude: lng }));
+                      }}
+                      existingPoints={points}
+                      currentPointId={editingPoint?.id}
+                      height="310px"
+                      onAddressResolved={(addr) => {
+                        setFormData((prev) => ({ ...prev, address_text: addr }));
+                        showToast('Address populated from map pin location!', 'success');
+                      }}
                     />
-                  </div>
 
-                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                    <label className="form-label">
-                      Street Address <span className="required">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      className="form-input"
-                      placeholder="e.g. 100 Municipal Square, Central Plaza"
-                      value={formData.address_text}
-                      onChange={(e) => setFormData({ ...formData, address_text: e.target.value })}
-                    />
-                  </div>
+                    {/* Manual Coordinate Inputs (Two-way synchronized) */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+                      <div className="form-group">
+                        <label className="form-label" style={{ fontSize: '0.74rem' }}>
+                          Latitude Coordinate <span className="required">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          required
+                          className="form-input"
+                          value={formData.latitude}
+                          onChange={(e) => setFormData({ ...formData, latitude: parseFloat(e.target.value) || 0 })}
+                        />
+                      </div>
 
-                  <div className="form-group">
-                    <label className="form-label">Jurisdictional Zone</label>
-                    <select
-                      className="form-select"
-                      value={formData.area}
-                      onChange={(e) => setFormData({ ...formData, area: e.target.value })}
-                    >
-                      {ZONES.filter((z) => z !== 'All Zones').map((z) => (
-                        <option key={z} value={z}>{z}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Waste Stream Type</label>
-                    <select
-                      className="form-select"
-                      value={formData.waste_type}
-                      onChange={(e) => setFormData({ ...formData, waste_type: e.target.value as WasteType })}
-                    >
-                      {WASTE_TYPES.map((t) => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Collection Priority</label>
-                    <select
-                      className="form-select"
-                      value={formData.priority}
-                      onChange={(e) => setFormData({ ...formData, priority: e.target.value as Priority })}
-                    >
-                      {PRIORITIES.map((p) => (
-                        <option key={p} value={p}>{p} Priority</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Receptacle Capacity (Liters)</label>
-                    <input
-                      type="number"
-                      min={120}
-                      max={1200}
-                      step={60}
-                      className="form-input"
-                      value={formData.bin_capacity_liters}
-                      onChange={(e) => setFormData({ ...formData, bin_capacity_liters: Number(e.target.value) })}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Latitude Coordinate</label>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      required
-                      className="form-input"
-                      value={formData.latitude}
-                      onChange={(e) => setFormData({ ...formData, latitude: parseFloat(e.target.value) || 0 })}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Longitude Coordinate</label>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      required
-                      className="form-input"
-                      value={formData.longitude}
-                      onChange={(e) => setFormData({ ...formData, longitude: parseFloat(e.target.value) || 0 })}
-                    />
-                  </div>
-
-                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                    <label className="form-label">Estimated Fill Level ({formData.estimated_fill_percent}%)</label>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={formData.estimated_fill_percent}
-                      onChange={(e) => setFormData({ ...formData, estimated_fill_percent: Number(e.target.value) })}
-                      style={{ width: '100%' }}
-                    />
-                  </div>
-
-                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                    <label className="form-label">Operational Notes (Optional)</label>
-                    <textarea
-                      className="form-textarea"
-                      placeholder="Access restrictions, gate keys, or specific driver instructions..."
-                      value={formData.notes}
-                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    />
+                      <div className="form-group">
+                        <label className="form-label" style={{ fontSize: '0.74rem' }}>
+                          Longitude Coordinate <span className="required">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          required
+                          className="form-input"
+                          value={formData.longitude}
+                          onChange={(e) => setFormData({ ...formData, longitude: parseFloat(e.target.value) || 0 })}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setIsModalOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  {editingPoint ? 'Save Changes' : 'Register Location'}
-                </button>
+              {/* GUARANTEED VISIBLE, PINNED MODAL FOOTER WITH SUBMIT BUTTON */}
+              <div 
+                className="modal-footer" 
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'space-between',
+                  padding: '1rem 1.5rem',
+                  backgroundColor: 'var(--bg-subtle)',
+                  borderTop: '1px solid var(--border-color)',
+                  flexShrink: 0
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  <MapPin size={16} style={{ color: 'var(--primary)' }} />
+                  <span>
+                    Selected Coordinates: <strong style={{ color: 'var(--text-main)', fontFamily: 'var(--font-mono)' }}>
+                      {formData.latitude.toFixed(5)}, {formData.longitude.toFixed(5)}
+                    </strong>
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setIsModalOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit" 
+                    id="submit-collection-point-btn"
+                    className="btn btn-primary"
+                    style={{ 
+                      display: 'inline-flex', 
+                      alignItems: 'center', 
+                      gap: '0.5rem', 
+                      padding: '0.6rem 1.45rem', 
+                      fontWeight: 600,
+                      boxShadow: '0 2px 8px rgba(79, 70, 229, 0.35)'
+                    }}
+                  >
+                    <Check size={16} />
+                    <span>{editingPoint ? 'Save Point Changes' : 'Submit & Register Point'}</span>
+                  </button>
+                </div>
               </div>
             </form>
           </div>
